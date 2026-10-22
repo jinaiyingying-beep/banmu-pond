@@ -26,7 +26,7 @@
    ```
 2. 进入解压后的文件夹，运行打包脚本：
    ```bash
-   git clone https://github.com/<你的用户名>/banmu-pond.git
+   git clone https://github.com/jinaiyingying-beep/banmu-pond.git
    cd banmu-pond
    ./build.sh
    ```
