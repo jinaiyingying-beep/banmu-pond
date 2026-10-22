@@ -1,0 +1,1361 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>半亩塘</title>
+<style>
+  :root {
+    --ink: #24332c;
+    --ink-soft: #5b6b62;
+    --paper: rgba(246, 241, 226, 0.94);
+    --glass: rgba(236, 244, 236, 0.22);
+    --glass-line: rgba(255, 255, 255, 0.38);
+    --seal: #b5402f;
+    --kai: "Kaiti SC", "STKaiti", "KaiTi", "LXGW WenKai", "Songti SC", "Noto Serif CJK SC", serif;
+    --sans: -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #3d675c; color-scheme: only light; }
+  body { font-family: var(--sans); color: #fff; user-select: none; -webkit-user-select: none; cursor: default; }
+  canvas#pond { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+
+  /* —— 池塘名字木牌 —— */
+  .plaque {
+    position: fixed; top: 22px; left: 50%; transform: translateX(-50%);
+    padding: 9px 26px 10px 30px; border-radius: 6px;
+    background: linear-gradient(180deg, #f7f1df, #ece2c6);
+    color: var(--ink); font-family: var(--kai); font-size: 21px; letter-spacing: .32em;
+    box-shadow: 0 6px 18px rgba(20, 45, 38, .28), inset 0 0 0 1px rgba(120, 95, 60, .18);
+    display: flex; align-items: center; gap: 10px; white-space: nowrap;
+    transition: opacity .6s;
+  }
+  .plaque::before, .plaque::after {
+    content: ""; position: absolute; top: -9px; width: 2px; height: 12px; background: rgba(90, 70, 45, .55);
+  }
+  .plaque::before { left: 22%; } .plaque::after { right: 22%; }
+  .plaque .seal {
+    font-size: 10px; letter-spacing: 0; line-height: 1; color: #fbe9e2; background: var(--seal);
+    padding: 3px 3px; border-radius: 2px; writing-mode: vertical-rl; font-family: var(--kai);
+  }
+
+  /* —— 池畔小记 卡片 —— */
+  .journal {
+    position: fixed; top: 22px; right: 22px; width: 248px;
+    padding: 16px 18px 14px; border-radius: 18px;
+    background: var(--glass); border: 1px solid var(--glass-line);
+    backdrop-filter: blur(14px) saturate(1.15); -webkit-backdrop-filter: blur(14px) saturate(1.15);
+    box-shadow: 0 10px 30px rgba(16, 40, 34, .18);
+    text-shadow: 0 1px 2px rgba(15, 40, 33, .35);
+    transition: opacity .6s;
+  }
+  .journal h3 { margin: 0 0 4px; font: 500 14px/1.2 var(--kai); letter-spacing: .25em; opacity: .9; }
+  .journal .clock { font: 300 44px/1.05 var(--sans); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+  .journal .date { font-size: 12.5px; opacity: .85; margin-top: 2px; letter-spacing: .06em; }
+  .journal .now { margin-top: 12px; display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .journal .now svg { width: 22px; height: 22px; flex: none; }
+  .journal .now b { font-weight: 600; }
+  .journal .city { cursor: pointer; }
+  .journal .forecast { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 10px; }
+  .journal .forecast div { text-align: center; font-size: 11.5px; opacity: .9; padding: 6px 0 4px; border-radius: 10px; background: rgba(255,255,255,.08); }
+  .journal .forecast svg { width: 20px; height: 20px; display: block; margin: 3px auto; }
+  .journal .foot { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.22); font-size: 11px; opacity: .78; display: flex; justify-content: space-between; letter-spacing: .04em; }
+
+  .hint {
+    position: fixed; left: 50%; bottom: 42px; transform: translateX(-50%);
+    padding: 9px 18px; border-radius: 999px; font-size: 13px; letter-spacing: .08em;
+    background: rgba(20, 45, 38, .35); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    transition: opacity 1.2s; white-space: nowrap;
+  }
+  .hidden { opacity: 0 !important; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="pond"></canvas>
+
+<div class="plaque" id="plaque"><span id="pondName">半亩塘</span><span class="seal">观鱼</span></div>
+
+<aside class="journal" id="journal">
+  <h3>池畔小记</h3>
+  <div class="clock" id="clock">--:--</div>
+  <div class="date" id="date"></div>
+  <div class="now"><span id="nowIcon"></span><span id="nowText"><span class="city" id="cityName">未设城市</span> · 设置城市后显示天气</span></div>
+  <div class="forecast" id="forecast"></div>
+  <div class="foot"><span id="season"></span><span id="feedStat">今日喂食 0 次</span></div>
+</aside>
+
+<div class="hint" id="hint">移动指针，鱼会游过来 · 点击水面，撒一把鱼食</div>
+
+<script>
+"use strict";
+/* ============================================================
+   半亩塘 · 桌面锦鲤池
+   一个全屏 Canvas：池底 → 焦散 → 影子 → 鱼/龟 → 水面 → 荷叶 → 天气 → 光照
+   宿主（macOS App）通过 window.pond.* 传入指针与设置；
+   在普通浏览器里直接用鼠标交互。
+   ============================================================ */
+
+const HOST = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pond);
+const post = (msg) => { try { if (HOST) window.webkit.messageHandlers.pond.postMessage(msg); } catch (e) {} };
+
+/* ---------- 小工具 ---------- */
+const TAU = Math.PI * 2;
+const rand = (a = 1, b) => (b === undefined ? Math.random() * a : a + Math.random() * (b - a));
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (t) => t * t * (3 - 2 * t);
+const angDiff = (a, b) => { let d = (b - a) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return d; };
+const pick = (arr) => arr[(Math.random() * arr.length) | 0];
+function weighted(list) { // [[item, weight], ...]
+  let s = 0; for (const [, w] of list) s += w;
+  let r = Math.random() * s;
+  for (const [it, w] of list) { if ((r -= w) <= 0) return it; }
+  return list[0][0];
+}
+function makeCanvas(w, h) { const c = document.createElement("canvas"); c.width = Math.max(1, w | 0); c.height = Math.max(1, h | 0); return c; }
+function hexToRgb(h) { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function rgba(h, a) { const [r, g, b] = hexToRgb(h); return `rgba(${r},${g},${b},${a})`; }
+function mix(h1, h2, t) { const a = hexToRgb(h1), b = hexToRgb(h2); return `rgb(${a.map((v, i) => Math.round(lerp(v, b[i], t))).join(",")})`; }
+
+/* ---------- 设置 ---------- */
+const DEFAULTS = {
+  name: "半亩塘", fishCount: 60, showWidget: true, showTitle: true, fps: 60,
+  timeMode: "auto",      // auto | day | dusk | night
+  weatherMode: "auto",   // auto | clear | cloudy | rain | snow | storm
+  seasonMode: "auto",    // auto | spring | summer | autumn | winter
+  quality: "auto",       // auto | saver
+  city: null,            // {name, lat, lon}
+};
+let config = { ...DEFAULTS };
+if (!HOST) { try { Object.assign(config, JSON.parse(localStorage.getItem("banmu-config") || "{}")); } catch (e) {} }
+const saveLocal = () => { if (!HOST) try { localStorage.setItem("banmu-config", JSON.stringify(config)); } catch (e) {} };
+
+/* ---------- 画布 ---------- */
+const canvas = document.getElementById("pond");
+const ctx = canvas.getContext("2d");
+let W = 0, H = 0, DPR = 1, S = 1;          // CSS 尺寸、像素比、整体比例
+let bottomCanvas, causticCanvas, cctx, shadowCanvas, sctx;
+const SHADOW_SCALE = 0.25, CAUSTIC_SCALE = 0.5;
+
+function resize() {
+  W = innerWidth; H = innerHeight;
+  const cap = config.quality === "saver" ? 1 : 1.5;
+  DPR = Math.min(window.devicePixelRatio || 1, cap);
+  S = clamp(Math.min(W, H) / 950, 0.7, 1.6);
+  canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+  shadowCanvas = makeCanvas(W * SHADOW_SCALE, H * SHADOW_SCALE); sctx = shadowCanvas.getContext("2d");
+  causticCanvas = makeCanvas(W * CAUSTIC_SCALE, H * CAUSTIC_SCALE); cctx = causticCanvas.getContext("2d"); causticPatterns = null;
+  paintBottom();
+  layoutPads();
+  for (const f of fishes) { f.x = clamp(f.x, 0, W); f.y = clamp(f.y, 0, H); }
+}
+
+/* ============================================================
+   季节 / 时间 / 天气 状态
+   ============================================================ */
+function currentSeason() {
+  if (config.seasonMode !== "auto") return config.seasonMode;
+  const m = new Date().getMonth() + 1;
+  return m >= 3 && m <= 5 ? "spring" : m >= 6 && m <= 8 ? "summer" : m >= 9 && m <= 11 ? "autumn" : "winter";
+}
+const SEASON_CN = { spring: "春", summer: "夏", autumn: "秋", winter: "冬" };
+let season = currentSeason();
+
+// 日光 0(夜) ~ 1(昼)，暮色 0~1
+function daylight() {
+  if (config.timeMode === "day") return { light: 1, dusk: 0 };
+  if (config.timeMode === "night") return { light: 0, dusk: 0 };
+  if (config.timeMode === "dusk") return { light: 0.45, dusk: 1 };
+  const d = new Date(), h = d.getHours() + d.getMinutes() / 60;
+  const rise = sunTimes.rise, set = sunTimes.set, tw = 0.9;
+  let light;
+  if (h < rise - tw / 2 || h > set + tw / 2) light = 0;
+  else if (h < rise + tw / 2) light = smooth((h - (rise - tw / 2)) / tw);
+  else if (h > set - tw / 2) light = 1 - smooth((h - (set - tw / 2)) / tw);
+  else light = 1;
+  const dusk = Math.max(0, 1 - Math.min(Math.abs(h - rise), Math.abs(h - set)) / 1.1);
+  return { light, dusk };
+}
+let sunTimes = { rise: 6.1, set: 18.2 };
+
+const weather = { kind: "clear", temp: null, daily: [], updated: 0, error: null };
+function weatherKind() { return config.weatherMode === "auto" ? weather.kind : config.weatherMode; }
+
+/* ============================================================
+   池底：一次性绘制的静态画
+   ============================================================ */
+const SEASON_BOTTOM = {
+  spring: { c: "#7aa48d", e: "#3f6a5c", moss: "#4f7a4a" },
+  summer: { c: "#73a08a", e: "#365f54", moss: "#456f3e" },
+  autumn: { c: "#82a184", e: "#45695a", moss: "#62703f" },
+  winter: { c: "#86a2a0", e: "#4a6566", moss: "#5c6f60" },
+};
+function seededRandom(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+
+function paintBottom() {
+  const pal = SEASON_BOTTOM[season];
+  bottomCanvas = makeCanvas(W * DPR, H * DPR);
+  const g = bottomCanvas.getContext("2d");
+  g.scale(DPR, DPR);
+  const R = seededRandom(20261021);
+  const r = (a = 1, b) => (b === undefined ? R() * a : a + R() * (b - a));
+
+  // 底色：中间浅、四周深
+  const base = g.createRadialGradient(W * 0.48, H * 0.52, 0, W * 0.5, H * 0.5, Math.hypot(W, H) * 0.62);
+  base.addColorStop(0, pal.c); base.addColorStop(1, pal.e);
+  g.fillStyle = base; g.fillRect(0, 0, W, H);
+
+  // 低频斑驳（小图放大，天然柔和）
+  for (const [cells, alpha] of [[14, 0.28], [36, 0.16]]) {
+    const cw = cells, ch = Math.max(2, Math.round(cells * H / W));
+    const m = makeCanvas(cw, ch), mg = m.getContext("2d");
+    for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
+      const v = r();
+      mg.fillStyle = v < 0.33 ? "#2f5446" : v < 0.66 ? "#a2b48e" : "#6e7f5a";
+      mg.globalAlpha = r(0.2, 1); mg.fillRect(x, y, 1, 1);
+    }
+    g.save(); g.globalAlpha = alpha; g.imageSmoothingEnabled = true; g.imageSmoothingQuality = "high";
+    g.drawImage(m, -W * 0.05, -H * 0.05, W * 1.1, H * 1.1); g.restore();
+  }
+
+  // 细沙斑
+  for (let i = 0; i < 18; i++) {
+    const x = r(W), y = r(H), rad = r(80, 260) * S;
+    const s = g.createRadialGradient(x, y, 0, x, y, rad);
+    s.addColorStop(0, "rgba(214, 205, 160, 0.22)"); s.addColorStop(1, "rgba(214, 205, 160, 0)");
+    g.fillStyle = s; g.beginPath(); g.ellipse(x, y, rad * 1.4, rad, r(TAU), 0, TAU); g.fill();
+  }
+  // 青苔
+  for (let i = 0; i < 26; i++) {
+    const x = r(W), y = r(H), rad = r(40, 150) * S;
+    const s = g.createRadialGradient(x, y, 0, x, y, rad);
+    s.addColorStop(0, rgba(pal.moss, 0.4)); s.addColorStop(1, rgba(pal.moss, 0));
+    g.fillStyle = s; g.beginPath(); g.arc(x, y, rad, 0, TAU); g.fill();
+  }
+  // 碎砂砾
+  const grains = Math.round(W * H / 260);
+  for (let i = 0; i < grains; i++) {
+    const v = r();
+    g.fillStyle = v < 0.5 ? "rgba(40,60,50,0.18)" : "rgba(225,225,195,0.16)";
+    const s = r(0.6, 2.2) * S;
+    g.fillRect(r(W), r(H), s, s * r(0.6, 1));
+  }
+
+  // 卵石：成堆分布
+  const STONES = ["#6f7b6a", "#8b8b78", "#7d8472", "#9a917a", "#5a6a5e", "#a39d88", "#6c6656"];
+  const piles = Math.round(W * H / 90000);
+  const drawStone = (x, y, rad) => {
+    const pts = [], n = 9, rot = r(TAU), ecc = r(0.65, 1);
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * TAU, rr = rad * r(0.86, 1.08);
+      pts.push([Math.cos(a) * rr, Math.sin(a) * rr * ecc]);
+    }
+    g.save(); g.translate(x, y); g.rotate(rot);
+    // 接触阴影
+    const sh = g.createRadialGradient(rad * 0.25, rad * 0.35, rad * 0.3, rad * 0.25, rad * 0.35, rad * 1.5);
+    sh.addColorStop(0, "rgba(20,40,32,0.38)"); sh.addColorStop(1, "rgba(20,40,32,0)");
+    g.fillStyle = sh; g.beginPath(); g.arc(rad * 0.25, rad * 0.35, rad * 1.5, 0, TAU); g.fill();
+    // 石身
+    g.beginPath();
+    for (let k = 0; k <= n; k++) {
+      const p = pts[k % n], q = pts[(k + 1) % n];
+      const mx = (p[0] + q[0]) / 2, my = (p[1] + q[1]) / 2;
+      if (k === 0) g.moveTo(mx, my); else g.quadraticCurveTo(p[0], p[1], mx, my);
+    }
+    g.closePath();
+    const col = pick(STONES);
+    const sg = g.createRadialGradient(-rad * 0.35, -rad * 0.4, rad * 0.1, 0, 0, rad * 1.15);
+    sg.addColorStop(0, mix(col, "#e8e6d4", 0.35)); sg.addColorStop(0.6, col); sg.addColorStop(1, mix(col, "#22322a", 0.45));
+    g.fillStyle = sg; g.fill();
+    g.globalAlpha = 0.25; g.strokeStyle = "#24362c"; g.lineWidth = 0.8; g.stroke();
+    g.restore();
+  };
+  for (let p = 0; p < piles; p++) {
+    const cx = r(W), cy = r(H), spread = r(30, 120) * S, count = (r(3, 14)) | 0;
+    for (let k = 0; k < count; k++) {
+      const a = r(TAU), d = Math.sqrt(r()) * spread;
+      drawStone(cx + Math.cos(a) * d, cy + Math.sin(a) * d, r(5, 17) * S);
+    }
+  }
+  for (let k = 0; k < piles * 4; k++) drawStone(r(W), r(H), r(3, 8) * S);
+
+  // 水草（贴底，深色细丝）
+  g.lineCap = "round";
+  const tufts = Math.round(W * H / 120000);
+  for (let t = 0; t < tufts; t++) {
+    const x = r(W), y = r(H), len = r(40, 120) * S, dir = r(TAU), n = (r(5, 12)) | 0;
+    for (let k = 0; k < n; k++) {
+      const a = dir + r(-0.7, 0.7), l = len * r(0.5, 1), bend = r(-0.6, 0.6);
+      g.strokeStyle = rgba(pal.moss, r(0.25, 0.5)); g.lineWidth = r(1.2, 3) * S;
+      g.beginPath(); g.moveTo(x, y);
+      g.quadraticCurveTo(x + Math.cos(a) * l * 0.5 + Math.cos(a + 1.57) * l * bend * 0.3,
+        y + Math.sin(a) * l * 0.5 + Math.sin(a + 1.57) * l * bend * 0.3,
+        x + Math.cos(a + bend * 0.5) * l, y + Math.sin(a + bend * 0.5) * l);
+      g.stroke();
+    }
+  }
+
+  // 水体色调与边缘加深（越靠边越深）
+  g.fillStyle = "rgba(58, 118, 104, 0.22)"; g.fillRect(0, 0, W, H);
+  const vig = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.25, W / 2, H / 2, Math.hypot(W, H) * 0.6);
+  vig.addColorStop(0, "rgba(18, 52, 46, 0)"); vig.addColorStop(1, "rgba(18, 52, 46, 0.42)");
+  g.fillStyle = vig; g.fillRect(0, 0, W, H);
+}
+
+/* ============================================================
+   焦散：预计算可平铺的 Worley 纹理（多帧循环），运行时平移叠加
+   ============================================================ */
+const CAUSTIC_FRAMES = [];
+(function buildCaustics() {
+  const N = 192, cells = 5, FRAMES = 10;
+  const R = seededRandom(7);
+  const base = [], orbit = [];
+  for (let i = 0; i < cells * cells; i++) { base.push([R(), R()]); orbit.push([R() * TAU, 0.12 + R() * 0.16, R() < 0.5 ? 1 : -1]); }
+  for (let f = 0; f < FRAMES; f++) {
+    const c = makeCanvas(N, N), g = c.getContext("2d"), img = g.createImageData(N, N);
+    const pts = base.map((b, i) => {
+      const [ph, rad, dir] = orbit[i], a = ph + dir * (f / FRAMES) * TAU;
+      return [b[0] + Math.cos(a) * rad, b[1] + Math.sin(a) * rad];
+    });
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const u = x / N, v0 = y / N, ph = (f / FRAMES) * TAU;
+      const px = (u + 0.045 * Math.sin(TAU * (v0 * 2 + u)) + 0.03 * Math.sin(TAU * v0 * 3 + ph)) * cells;
+      const py = (v0 + 0.045 * Math.sin(TAU * (u * 2 - v0)) + 0.03 * Math.cos(TAU * u * 3 + ph)) * cells;
+      const cx = Math.floor(px), cy = Math.floor(py);
+      let f1 = 9, f2 = 9;
+      for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+        const gx = cx + ox, gy = cy + oy;
+        const wx = ((gx % cells) + cells) % cells, wy = ((gy % cells) + cells) % cells;
+        const p = pts[wy * cells + wx];
+        const dx = gx + p[0] - px, dy = gy + p[1] - py, d = Math.sqrt(dx * dx + dy * dy);
+        if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
+      }
+      const edge = f2 - f1;
+      let v = 1 - clamp(edge / 0.24, 0, 1);
+      v = Math.pow(v, 3.2) * (0.55 + 0.45 * clamp(f1 * 1.8, 0, 1));
+      const k = (y * N + x) * 4;
+      img.data[k] = 255; img.data[k + 1] = 255; img.data[k + 2] = 236; img.data[k + 3] = Math.round(v * 255);
+    }
+    g.putImageData(img, 0, 0);
+    CAUSTIC_FRAMES.push(c);
+  }
+})();
+let causticPatterns = null;
+
+function drawCaustics(t, strength) {
+  const w = causticCanvas.width, h = causticCanvas.height;
+  cctx.setTransform(1, 0, 0, 1, 0, 0);
+  cctx.clearRect(0, 0, w, h);
+  if (strength <= 0.01) return;
+  if (!causticPatterns) causticPatterns = CAUSTIC_FRAMES.map((c) => cctx.createPattern(c, "repeat"));
+  const scale = 2.9 * S * CAUSTIC_SCALE;
+  const layers = [
+    { sp: 0.11, ox: 9, oy: 5, sc: scale, a: 0.42 },
+    { sp: 0.08, ox: -6, oy: 8, sc: scale * 1.61, a: 0.3 },
+  ];
+  for (const L of layers) {
+    const ft = (t * L.sp * 10) % CAUSTIC_FRAMES.length;
+    const i0 = Math.floor(ft), i1 = (i0 + 1) % CAUSTIC_FRAMES.length, fr = ft - i0;
+    for (const [idx, a] of [[i0, 1 - fr], [i1, fr]]) {
+      const pat = causticPatterns[idx];
+      cctx.setTransform(L.sc, 0, 0, L.sc, (t * L.ox) % (192 * L.sc), (t * L.oy) % (192 * L.sc));
+      cctx.globalAlpha = a * L.a * strength;
+      cctx.fillStyle = pat;
+      cctx.fillRect(-192, -192, w / L.sc + 384, h / L.sc + 384);
+    }
+  }
+  cctx.setTransform(1, 0, 0, 1, 0, 0);
+  cctx.globalAlpha = 1;
+}
+
+/* ============================================================
+   锦鲤
+   ============================================================ */
+const VARIETIES = [
+  // 名称, 底色, 斑纹生成器, 鳍色, 权重
+  { name: "红白", base: "#f3eee4", fin: "rgba(250,246,238,0.55)", w: 7, spots: (R) => redPatches(R, "#d8452b", 2 + (R() * 2 | 0)) },
+  { name: "丹顶", base: "#f5f1e8", fin: "rgba(250,246,238,0.55)", w: 1.5, spots: () => [{ t: 0.08, o: 0, rx: 0.07, ry: 0.55, c: "#d63a26" }] },
+  { name: "大正三色", base: "#f2ede2", fin: "rgba(250,246,238,0.55)", w: 5, spots: (R) => [...redPatches(R, "#d74a2c", 2), ...inkDots(R, "#1d1f22", 3 + (R() * 3 | 0))] },
+  { name: "昭和三色", base: "#202124", fin: "rgba(60,60,62,0.55)", w: 4, spots: (R) => [...redPatches(R, "#d2432a", 2), ...whitePatches(R, "#f0ebe1", 2)] },
+  { name: "黄金", base: "#e9b23c", fin: "rgba(240,196,92,0.6)", w: 4, metal: true, spots: () => [] },
+  { name: "山吹橙", base: "#ea842f", fin: "rgba(240,150,70,0.55)", w: 4, metal: true, spots: () => [] },
+  { name: "白金", base: "#eeeee8", fin: "rgba(245,245,240,0.55)", w: 2.5, metal: true, spots: () => [] },
+  { name: "浅黄", base: "#7f98ab", fin: "rgba(232,140,80,0.55)", w: 2.5, spots: (R) => [{ t: 0.55, o: 1, rx: 0.3, ry: 0.5, c: "#d9774a" }, { t: 0.55, o: -1, rx: 0.3, ry: 0.5, c: "#d9774a" }, { t: 0.15, o: 0, rx: 0.08, ry: 0.6, c: "#d8d8cf" }] },
+  { name: "白写", base: "#f1ede4", fin: "rgba(250,246,238,0.5)", w: 2, spots: (R) => inkDots(R, "#1b1c1f", 4 + (R() * 3 | 0), 1.4) },
+  { name: "茶鲤", base: "#a37a52", fin: "rgba(170,130,90,0.55)", w: 2, spots: () => [] },
+  { name: "乌鲤", base: "#26272a", fin: "rgba(40,40,44,0.6)", w: 1.5, spots: () => [] },
+  { name: "绯鲤", base: "#d8452b", fin: "rgba(230,110,80,0.55)", w: 2, spots: (R) => R() < 0.5 ? whitePatches(R, "#f2ece2", 1) : [] },
+];
+function redPatches(R, c, n) {
+  const out = [];
+  let t = 0.12 + R() * 0.08;
+  for (let i = 0; i < n && t < 0.85; i++) {
+    const len = 0.1 + R() * 0.16;
+    const o = (R() - 0.5) * 0.7;
+    out.push({ t: t + len / 2, o, rx: len / 2 + 0.03, ry: 0.55 + R() * 0.45, c });
+    if (R() < 0.6) out.push({ t: t + len * R(), o: o + (R() - 0.5) * 0.8, rx: len * 0.35, ry: 0.4 + R() * 0.3, c });
+    t += len + 0.04 + R() * 0.1;
+  }
+  return out;
+}
+function whitePatches(R, c, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push({ t: 0.15 + R() * 0.6, o: (R() - 0.5) * 1.4, rx: 0.06 + R() * 0.08, ry: 0.4 + R() * 0.4, c });
+  return out;
+}
+function inkDots(R, c, n, k = 1) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push({ t: 0.2 + R() * 0.62, o: (R() - 0.5) * 1.5, rx: (0.025 + R() * 0.045) * k, ry: (0.18 + R() * 0.25) * k, c });
+  return out;
+}
+
+const SEG = 12;
+const fishes = [];
+
+class Fish {
+  constructor(x, y) {
+    const v = weighted(VARIETIES.map((v) => [v, v.w]));
+    this.v = v;
+    this.spots = v.spots(Math.random);
+    this.len = (42 + Math.pow(Math.random(), 0.8) * 56) * S;
+    this.longFin = Math.random() < 0.18;
+    this.x = x; this.y = y;
+    this.a = rand(TAU);
+    this.speed = rand(20, 40) * S;
+    this.cruise = rand(22, 40) * S;
+    this.phase = rand(TAU);
+    this.wseed = rand(1000);
+    this.depth = rand(0.1, 0.9); this.depthSeed = rand(1000);
+    this.seg = this.len / (SEG - 1);
+    this.pts = [];
+    for (let i = 0; i < SEG; i++) this.pts.push([x - Math.cos(this.a) * this.seg * i, y - Math.sin(this.a) * this.seg * i]);
+    this.burst = 0; this.target = null; this.full = 0;
+    this.alpha = 0; // 淡入
+  }
+}
+
+function syncFishCount() {
+  const n = clamp(config.fishCount | 0, 5, 160);
+  while (fishes.length < n) fishes.push(new Fish(rand(W * 0.1, W * 0.9), rand(H * 0.1, H * 0.9)));
+  while (fishes.length > n) fishes.splice((Math.random() * fishes.length) | 0, 1);
+}
+
+// 身体宽度轮廓：头圆、肩宽、尾柄收窄
+function bodyW(t) {
+  if (t < 0.28) { const k = (0.28 - t) / 0.31; return Math.sqrt(Math.max(0, 1 - k * k)); }
+  return Math.pow((1 - t) / 0.72, 1.12) * 0.9 + 0.1;
+}
+const BW = Array.from({ length: SEG }, (_, i) => bodyW(i / (SEG - 1)));
+
+const pointer = { x: -1e4, y: -1e4, vx: 0, vy: 0, last: -1e9, speed: 0 };
+
+function updateFish(f, dt, t, grid) {
+  const L = f.len;
+  let fx = 0, fy = 0;
+  // 漫游
+  const wa = f.a + Math.sin(t * 0.37 + f.wseed) * 0.9 + Math.sin(t * 0.13 + f.wseed * 2) * 0.7;
+  fx += Math.cos(wa); fy += Math.sin(wa);
+  // 边界：温柔地掉头
+  const m = 110 * S;
+  if (f.x < m) fx += ((m - f.x) / m) * 3; if (f.x > W - m) fx -= ((f.x - (W - m)) / m) * 3;
+  if (f.y < m) fy += ((m - f.y) / m) * 3; if (f.y > H - m) fy -= ((f.y - (H - m)) / m) * 3;
+  // 邻居：分离 + 少许结伴
+  let ax = 0, ay = 0, cn = 0, cx = 0, cy = 0;
+  const gx = (f.x / 160) | 0, gy = (f.y / 160) | 0;
+  for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+    const cell = grid.get((gx + ox) * 10007 + (gy + oy));
+    if (!cell) continue;
+    for (const o of cell) {
+      if (o === f) continue;
+      const dx = f.x - o.x, dy = f.y - o.y, d2 = dx * dx + dy * dy;
+      if (d2 > 160 * 160 || d2 < 0.01) continue;
+      const d = Math.sqrt(d2), sep = (L + o.len) * 0.5;
+      if (d < sep && Math.abs(f.depth - o.depth) < 0.35) { fx += (dx / d) * (sep - d) / sep * 2.2; fy += (dy / d) * (sep - d) / sep * 2.2; }
+      ax += Math.cos(o.a); ay += Math.sin(o.a); cx += o.x; cy += o.y; cn++;
+    }
+  }
+  if (cn) { fx += (ax / cn) * 0.35; fy += (ay / cn) * 0.35; fx += ((cx / cn - f.x) / 160) * 0.25; fy += ((cy / cn - f.y) / 160) * 0.25; }
+
+  let want = f.cruise * (0.8 + 0.4 * Math.sin(t * 0.21 + f.wseed));
+  let turn = 1.7;
+
+  // 指针：好奇地靠近；快速划过时受惊散开
+  const active = t - pointer.last < 4;
+  if (active) {
+    const dx = pointer.x - f.x, dy = pointer.y - f.y, d = Math.hypot(dx, dy);
+    if (pointer.speed > 1400 * S && d < 150 * S) {
+      fx -= (dx / d) * 6; fy -= (dy / d) * 6; want = 170 * S; turn = 5;
+    } else if (d < 340 * S && f.full < 1) {
+      const k = 1 - d / (340 * S);
+      if (d > 45 * S) { fx += (dx / d) * 2.4 * k; fy += (dy / d) * 2.4 * k; want = Math.max(want, lerp(want, 70 * S, k)); }
+      else { fx += (-dy / d) * 1.2; fy += (dx / d) * 1.2; } // 到了就绕着转
+      turn = 2.6;
+    }
+  }
+
+  // 鱼食
+  if (pellets.length && f.full < 3) {
+    let best = null, bd = 480 * S;
+    for (const p of pellets) { if (p.eaten) continue; const d = Math.hypot(p.x - f.x, p.y - f.y); if (d < bd) { bd = d; best = p; } }
+    if (best) {
+      const dx = best.x - f.x, dy = best.y - f.y;
+      fx += (dx / bd) * 5; fy += (dy / bd) * 5;
+      want = lerp(110, 60, bd / (480 * S)) * S; turn = 3.6;
+      // 头部触到就吃掉
+      const hx = f.x + Math.cos(f.a) * L * 0.06, hy = f.y + Math.sin(f.a) * L * 0.06;
+      if (Math.hypot(best.x - hx, best.y - hy) < L * 0.16 + best.r) {
+        best.eaten = true; f.full += 1; f.burst = 0.6;
+        addRipple(best.x, best.y, 18 * S, 0.9, 0.55);
+      }
+    }
+  }
+  f.full = Math.max(0, f.full - dt * 0.04);
+  if (Math.random() < dt * 0.02) f.burst = rand(0.8, 1.6); // 偶尔冲刺一下
+  if (f.burst > 0) { want *= 1.9; f.burst -= dt; }
+
+  // 转向 + 速度
+  const desired = Math.atan2(fy, fx);
+  const da = angDiff(f.a, desired);
+  const maxTurn = Math.min(turn, (f.speed + 18 * S) / (f.len * 0.5));
+  f.a += clamp(da, -maxTurn * dt, maxTurn * dt);
+  f.speed = lerp(f.speed, want, 1 - Math.exp(-dt * 1.6));
+  f.x += Math.cos(f.a) * f.speed * dt; f.y += Math.sin(f.a) * f.speed * dt;
+
+  // 摆尾节奏随速度
+  f.phase += dt * (3.2 + f.speed / S * 0.09);
+  f.depth = clamp(0.5 + 0.42 * Math.sin(t * 0.05 + f.depthSeed), 0.05, 0.95);
+  f.alpha = Math.min(1, f.alpha + dt * 0.8);
+
+  // 脊椎：跟随链
+  const p = f.pts; p[0][0] = f.x; p[0][1] = f.y;
+  for (let i = 1; i < SEG; i++) {
+    const dx = p[i][0] - p[i - 1][0], dy = p[i][1] - p[i - 1][1], d = Math.hypot(dx, dy) || 1;
+    let ang = Math.atan2(dy, dx);
+    // 限制相邻两节的弯曲角度，避免卷成虾米
+    const prev = i === 1 ? f.a + Math.PI : Math.atan2(p[i - 1][1] - p[i - 2][1], p[i - 1][0] - p[i - 2][0]);
+    const bend = angDiff(prev, ang), lim = 0.1;
+    if (bend > lim) ang = prev + lim; else if (bend < -lim) ang = prev - lim;
+    p[i][0] = p[i - 1][0] + Math.cos(ang) * f.seg; p[i][1] = p[i - 1][1] + Math.sin(ang) * f.seg;
+  }
+}
+
+// 计算显示用的脊椎（加入摆动）与法线
+const _q = Array.from({ length: SEG }, () => [0, 0]), _n = Array.from({ length: SEG }, () => [0, 0]);
+function spine(f) {
+  const p = f.pts, amp = f.len * (0.035 + Math.min(0.05, f.speed / S / 2400));
+  for (let i = 0; i < SEG; i++) {
+    const a = p[Math.max(0, i - 1)], b = p[Math.min(SEG - 1, i + 1)];
+    let tx = a[0] - b[0], ty = a[1] - b[1]; const d = Math.hypot(tx, ty) || 1; tx /= d; ty /= d;
+    _n[i][0] = -ty; _n[i][1] = tx;
+    const k = i / (SEG - 1), wob = Math.sin(f.phase - i * 0.55) * amp * (0.15 + k * k * 1.3);
+    _q[i][0] = p[i][0] + _n[i][0] * wob; _q[i][1] = p[i][1] + _n[i][1] * wob;
+  }
+  // 平滑后的法线
+  for (let i = 0; i < SEG; i++) {
+    const a = _q[Math.max(0, i - 1)], b = _q[Math.min(SEG - 1, i + 1)];
+    let tx = a[0] - b[0], ty = a[1] - b[1]; const d = Math.hypot(tx, ty) || 1;
+    _n[i][0] = -ty / d; _n[i][1] = tx / d;
+  }
+}
+function at(t) { // 沿脊椎插值：位置、法线、切角
+  const f = t * (SEG - 1), i = clamp(Math.floor(f), 0, SEG - 2), k = f - i;
+  const x = lerp(_q[i][0], _q[i + 1][0], k), y = lerp(_q[i][1], _q[i + 1][1], k);
+  const nx = lerp(_n[i][0], _n[i + 1][0], k), ny = lerp(_n[i][1], _n[i + 1][1], k);
+  return [x, y, nx, ny, Math.atan2(ny, nx) - Math.PI / 2];
+}
+
+function bodyPath(f, ox = 0, oy = 0, scale = 1) {
+  const half = f.len * 0.125, P = [];
+  for (let i = 0; i < SEG; i++) { const w = BW[i] * half; P.push([_q[i][0] + _n[i][0] * w, _q[i][1] + _n[i][1] * w]); }
+  for (let i = SEG - 1; i >= 0; i--) { const w = BW[i] * half; P.push([_q[i][0] - _n[i][0] * w, _q[i][1] - _n[i][1] * w]); }
+  // 鼻尖
+  const tx = _n[0][1], ty = -_n[0][0];
+  P.push([_q[0][0] + tx * half * 0.55, _q[0][1] + ty * half * 0.55]);
+  const path = new Path2D(), n = P.length;
+  const X = (k) => (P[k % n][0] + ox) * scale, Y = (k) => (P[k % n][1] + oy) * scale;
+  path.moveTo((X(n - 1) + X(0)) / 2, (Y(n - 1) + Y(0)) / 2);
+  for (let k = 0; k < n; k++) path.quadraticCurveTo(X(k), Y(k), (X(k) + X(k + 1)) / 2, (Y(k) + Y(k + 1)) / 2);
+  path.closePath();
+  return path;
+}
+
+function drawFin(g, x, y, ang, len, wid, color, curl) {
+  g.save(); g.translate(x, y); g.rotate(ang);
+  g.beginPath(); g.moveTo(0, -wid * 0.25);
+  g.quadraticCurveTo(len * 0.55, -wid * (0.9 + curl), len, -wid * 0.1 + curl * wid);
+  g.quadraticCurveTo(len * 0.6, wid * 0.6, 0, wid * 0.25);
+  g.closePath(); g.fillStyle = color; g.fill();
+  g.globalAlpha *= 0.35; g.strokeStyle = "rgba(255,255,255,0.7)"; g.lineWidth = 0.6;
+  for (let k = 1; k < 4; k++) { g.beginPath(); g.moveTo(0, 0); g.lineTo(len * 0.92, -wid * 0.55 + (k / 4) * wid * 0.9 + curl * wid * 0.5); g.stroke(); }
+  g.restore();
+}
+
+function drawFish(f, g) {
+  spine(f);
+  const L = f.len, half = L * 0.125, v = f.v;
+  const depthFade = 1 - f.depth * 0.38;
+  g.save();
+  g.globalAlpha = f.alpha * depthFade;
+
+  // 胸鳍 / 腹鳍（在身体下面）
+  const flap = Math.sin(f.phase * 0.5) * 0.25;
+  for (const [tt, sc] of [[0.24, 1], [0.52, 0.6]]) {
+    const [x, y, nx, ny, ang] = at(tt), w = bodyW(tt) * half;
+    for (const side of [1, -1]) {
+      const fa = ang + Math.PI + side * (0.95 + flap * side);
+      drawFin(g, x + nx * w * side * 0.8, y + ny * w * side * 0.8, fa, L * 0.17 * sc * (f.longFin ? 1.5 : 1), L * 0.07 * sc, v.fin, 0.2 * side);
+    }
+  }
+  // 尾鳍
+  {
+    const [x, y, , , ang] = at(1);
+    const swing = Math.sin(f.phase - SEG * 0.55) * 0.45;
+    const tl = L * (f.longFin ? 0.42 : 0.26), tw = L * (f.longFin ? 0.17 : 0.13);
+    g.save(); g.translate(x, y); g.rotate(ang + Math.PI + swing);
+    g.beginPath(); g.moveTo(0, -half * 0.12);
+    g.bezierCurveTo(tl * 0.35, -tw * 0.4, tl * 0.8, -tw * 1.05, tl, -tw * 0.95 + Math.sin(f.phase) * tw * 0.12);
+    g.quadraticCurveTo(tl * 0.62, -tw * 0.1, tl * 0.5, 0);
+    g.quadraticCurveTo(tl * 0.62, tw * 0.1, tl, tw * 0.95 + Math.sin(f.phase + 1) * tw * 0.12);
+    g.bezierCurveTo(tl * 0.8, tw * 1.05, tl * 0.35, tw * 0.4, 0, half * 0.12);
+    g.closePath(); g.fillStyle = v.fin; g.fill();
+    g.globalAlpha *= 0.3; g.strokeStyle = "rgba(255,255,255,0.8)"; g.lineWidth = 0.6;
+    for (let k = -3; k <= 3; k++) { if (!k) continue; g.beginPath(); g.moveTo(0, 0); g.lineTo(tl * 0.95, (k / 3) * tw * 0.9); g.stroke(); }
+    g.restore();
+  }
+
+  // 身体
+  const body = bodyPath(f);
+  g.fillStyle = v.base; g.fill(body);
+  g.save(); g.clip(body);
+  for (const s of f.spots) {
+    const [x, y, nx, ny, ang] = at(clamp(s.t, 0, 1));
+    const w = bodyW(clamp(s.t, 0, 1)) * half;
+    g.save(); g.translate(x + nx * s.o * w, y + ny * s.o * w); g.rotate(ang);
+    g.beginPath(); g.ellipse(0, 0, s.rx * L, s.ry * w * 1.1, 0, 0, TAU); g.fillStyle = s.c; g.fill();
+    g.restore();
+  }
+  // 背脊高光 + 侧边暗部
+  g.beginPath(); g.moveTo(_q[0][0], _q[0][1]);
+  for (let i = 1; i < SEG - 2; i++) g.lineTo(_q[i][0], _q[i][1]);
+  g.strokeStyle = v.metal ? "rgba(255,250,220,0.55)" : "rgba(255,255,255,0.2)";
+  g.lineWidth = half * (v.metal ? 0.7 : 0.55); g.lineCap = "round"; g.stroke();
+  g.lineWidth = half * 0.12; g.strokeStyle = "rgba(30,30,30,0.18)"; g.stroke();
+  g.restore();
+  g.lineWidth = 1; g.strokeStyle = "rgba(25,40,35,0.2)"; g.stroke(body);
+  // 眼睛
+  const [ex, ey, enx, eny] = at(0.06), ew = bodyW(0.06) * half * 0.62;
+  g.fillStyle = "rgba(20,20,20,0.75)";
+  g.beginPath(); g.arc(ex + enx * ew, ey + eny * ew, Math.max(0.9, L * 0.012), 0, TAU); g.arc(ex - enx * ew, ey - eny * ew, Math.max(0.9, L * 0.012), 0, TAU); g.fill();
+  g.restore();
+}
+
+function drawFishShadow(f) {
+  // 鱼越浅，影子离得越远
+  const off = (1 - f.depth) * 16 * S + 3;
+  const body = bodyPath(f, off * 0.6, off, SHADOW_SCALE);
+  sctx.globalAlpha = 0.5 * f.alpha; sctx.fill(body);
+}
+
+/* ============================================================
+   乌龟
+   ============================================================ */
+const turtles = [];
+function makeTurtle() {
+  return { x: rand(W * 0.2, W * 0.8), y: rand(H * 0.2, H * 0.8), a: rand(TAU), speed: 12 * S, phase: rand(TAU), rest: 0, size: rand(26, 34) * S, depth: 0.55, seed: rand(1000) };
+}
+function updateTurtle(tu, dt, t) {
+  if (tu.rest > 0) { tu.rest -= dt; tu.speed = lerp(tu.speed, 0, 1 - Math.exp(-dt * 2)); }
+  else {
+    if (Math.random() < dt * 0.025) tu.rest = rand(4, 12);
+    tu.speed = lerp(tu.speed, 14 * S, 1 - Math.exp(-dt));
+    let fx = Math.cos(tu.a + Math.sin(t * 0.1 + tu.seed) * 1.2), fy = Math.sin(tu.a + Math.sin(t * 0.1 + tu.seed) * 1.2);
+    const m = 150 * S;
+    if (tu.x < m) fx += 3; if (tu.x > W - m) fx -= 3; if (tu.y < m) fy += 3; if (tu.y > H - m) fy -= 3;
+    tu.a += clamp(angDiff(tu.a, Math.atan2(fy, fx)), -0.5 * dt, 0.5 * dt);
+  }
+  tu.x += Math.cos(tu.a) * tu.speed * dt; tu.y += Math.sin(tu.a) * tu.speed * dt;
+  tu.phase += dt * (0.8 + tu.speed / S * 0.12);
+}
+function drawTurtle(tu, g, shadow) {
+  const s = tu.size;
+  if (shadow) {
+    sctx.save(); sctx.scale(SHADOW_SCALE, SHADOW_SCALE); sctx.translate(tu.x + 7 * S, tu.y + 10 * S); sctx.rotate(tu.a);
+    sctx.globalAlpha = 0.5; sctx.beginPath(); sctx.ellipse(0, 0, s * 1.05, s * 0.85, 0, 0, TAU); sctx.fill(); sctx.restore();
+    return;
+  }
+  g.save(); g.translate(tu.x, tu.y); g.rotate(tu.a); g.globalAlpha = 0.92;
+  const skin = "#6f7d4c", skinD = "#4d5a33";
+  // 四肢
+  const paddle = Math.sin(tu.phase) * 0.5;
+  for (const [px, py, side, front] of [[s * 0.45, s * 0.55, 1, 1], [s * 0.45, -s * 0.55, -1, 1], [-s * 0.5, s * 0.5, 1, 0], [-s * 0.5, -s * 0.5, -1, 0]]) {
+    g.save(); g.translate(px, py);
+    g.rotate(side * (front ? 0.6 + paddle * side : 2.3 - paddle * side));
+    g.beginPath(); g.ellipse(s * 0.28, 0, s * (front ? 0.36 : 0.26), s * 0.14, 0, 0, TAU); g.fillStyle = skin; g.fill();
+    g.restore();
+  }
+  // 尾、头
+  g.beginPath(); g.moveTo(-s * 0.9, -s * 0.07); g.lineTo(-s * 1.2, 0); g.lineTo(-s * 0.9, s * 0.07); g.fillStyle = skinD; g.fill();
+  const look = Math.sin(tu.phase * 0.3) * 0.15;
+  g.save(); g.translate(s * 0.92, 0); g.rotate(look);
+  g.beginPath(); g.ellipse(s * 0.18, 0, s * 0.3, s * 0.2, 0, 0, TAU); g.fillStyle = skin; g.fill();
+  g.strokeStyle = "#d8c35a"; g.lineWidth = s * 0.035; g.globalAlpha = 0.7;
+  g.beginPath(); g.moveTo(-s * 0.05, -s * 0.12); g.lineTo(s * 0.35, -s * 0.06); g.moveTo(-s * 0.05, s * 0.12); g.lineTo(s * 0.35, s * 0.06); g.stroke();
+  g.globalAlpha = 0.92; g.restore();
+  // 龟壳
+  const sh = g.createRadialGradient(-s * 0.2, -s * 0.25, s * 0.1, 0, 0, s * 1.05);
+  sh.addColorStop(0, "#8b8a55"); sh.addColorStop(0.7, "#5f6236"); sh.addColorStop(1, "#3e4226");
+  g.beginPath(); g.ellipse(0, 0, s, s * 0.8, 0, 0, TAU); g.fillStyle = sh; g.fill();
+  g.strokeStyle = "rgba(40,40,20,0.55)"; g.lineWidth = 1.1 * S;
+  // 盾片
+  const hx = s * 0.26, hy = s * 0.24;
+  for (const [cx, cy] of [[0, 0], [-hx * 1.6, 0], [hx * 1.6, 0]]) {
+    g.beginPath();
+    for (let k = 0; k < 6; k++) { const a = (k / 6) * TAU + Math.PI / 6; const X = cx + Math.cos(a) * hx, Y = cy + Math.sin(a) * hy * 1.1; k ? g.lineTo(X, Y) : g.moveTo(X, Y); }
+    g.closePath(); g.stroke();
+  }
+  g.beginPath(); g.ellipse(0, 0, s * 0.82, s * 0.63, 0, 0, TAU); g.stroke();
+  g.beginPath(); g.ellipse(-s * 0.25, -s * 0.28, s * 0.4, s * 0.2, -0.3, 0, TAU); g.fillStyle = "rgba(255,255,220,0.13)"; g.fill();
+  g.restore();
+}
+
+/* ============================================================
+   荷叶 / 荷花（预渲染成贴图）
+   ============================================================ */
+let pads = [], padsSeason = null;
+function padSprite(r, season, withered) {
+  const pad = 4, size = Math.ceil((r + pad) * 2 * DPR);
+  const c = makeCanvas(size, size), g = c.getContext("2d");
+  g.scale(DPR, DPR); g.translate(r + pad, r + pad);
+  const notch = 0.22;
+  const pal = withered ? ["#a08a4c", "#7b6a39", "#c2ab6a"] : season === "autumn" ? ["#7d9a3e", "#56782d", "#b4b25a"] : ["#5f9a3e", "#3d7a2e", "#9cc25a"];
+  g.beginPath(); g.moveTo(0, 0); g.arc(0, 0, r, notch, TAU - notch * 0.15); g.closePath();
+  const gr = g.createRadialGradient(-r * 0.2, -r * 0.2, r * 0.05, 0, 0, r);
+  gr.addColorStop(0, pal[0]); gr.addColorStop(0.75, pal[1]); gr.addColorStop(1, pal[2]);
+  g.fillStyle = gr; g.fill();
+  g.save(); g.clip();
+  // 叶脉
+  g.strokeStyle = "rgba(220,240,170,0.35)"; g.lineWidth = Math.max(0.7, r * 0.022);
+  const veins = 17;
+  for (let k = 0; k < veins; k++) {
+    const a = notch + (k + 0.5) / veins * (TAU - notch * 1.15);
+    g.beginPath(); g.moveTo(0, 0);
+    g.quadraticCurveTo(Math.cos(a + 0.08) * r * 0.55, Math.sin(a + 0.08) * r * 0.55, Math.cos(a) * r, Math.sin(a) * r); g.stroke();
+  }
+  // 斑点质感
+  for (let k = 0; k < r * 0.9; k++) {
+    const a = rand(TAU), d = Math.sqrt(rand()) * r;
+    g.fillStyle = withered ? "rgba(90,60,25,0.25)" : rand() < 0.5 ? "rgba(30,70,20,0.18)" : "rgba(200,230,140,0.15)";
+    g.beginPath(); g.arc(Math.cos(a) * d, Math.sin(a) * d, rand(0.5, 2.2) * (r / 50), 0, TAU); g.fill();
+  }
+  if (season === "autumn" || withered) for (let k = 0; k < 4; k++) {
+    const a = rand(TAU), d = rand(r * 0.5, r), rr = rand(r * 0.08, r * 0.22);
+    const sp = g.createRadialGradient(Math.cos(a) * d, Math.sin(a) * d, 0, Math.cos(a) * d, Math.sin(a) * d, rr);
+    sp.addColorStop(0, "rgba(140,95,35,0.55)"); sp.addColorStop(1, "rgba(140,95,35,0)");
+    g.fillStyle = sp; g.fillRect(-r, -r, r * 2, r * 2);
+  }
+  // 光泽
+  const sheen = g.createLinearGradient(-r, -r, r, r);
+  sheen.addColorStop(0, "rgba(255,255,240,0.22)"); sheen.addColorStop(0.5, "rgba(255,255,240,0)"); sheen.addColorStop(1, "rgba(0,30,10,0.18)");
+  g.fillStyle = sheen; g.fillRect(-r, -r, r * 2, r * 2);
+  g.restore();
+  g.beginPath(); g.moveTo(0, 0); g.arc(0, 0, r, notch, TAU - notch * 0.15); g.closePath();
+  g.strokeStyle = withered ? "rgba(80,60,25,0.6)" : "rgba(40,80,25,0.55)"; g.lineWidth = 1.2; g.stroke();
+  g.beginPath(); g.arc(0, 0, r * 0.05, 0, TAU); g.fillStyle = "rgba(230,240,180,0.6)"; g.fill();
+  return { c, off: r + pad };
+}
+function flowerSprite(r, kind) {
+  const pad = 4, size = Math.ceil((r + pad) * 2 * DPR);
+  const c = makeCanvas(size, size), g = c.getContext("2d");
+  g.scale(DPR, DPR); g.translate(r + pad, r + pad);
+  const tint = kind === "white" ? ["#ffffff", "#f3eee6", "#e7dccd"] : ["#fff4f4", "#f6a9bb", "#df5f86"];
+  const petal = (len, wid, ang, cols) => {
+    g.save(); g.rotate(ang);
+    const gr = g.createLinearGradient(0, 0, len, 0);
+    gr.addColorStop(0, cols[0]); gr.addColorStop(0.55, cols[1]); gr.addColorStop(1, cols[2]);
+    g.beginPath(); g.moveTo(0, 0);
+    g.bezierCurveTo(len * 0.35, -wid, len * 0.85, -wid * 0.7, len, 0);
+    g.bezierCurveTo(len * 0.85, wid * 0.7, len * 0.35, wid, 0, 0);
+    g.fillStyle = gr; g.fill();
+    g.strokeStyle = "rgba(160,60,90,0.25)"; g.lineWidth = 0.6; g.stroke();
+    g.restore();
+  };
+  // 投影
+  g.beginPath(); g.arc(r * 0.06, r * 0.08, r * 0.9, 0, TAU); g.fillStyle = "rgba(20,50,30,0.18)"; g.fill();
+  const off = rand(TAU);
+  for (let k = 0; k < 10; k++) petal(r * 0.98, r * 0.3, off + (k / 10) * TAU, tint);
+  for (let k = 0; k < 8; k++) petal(r * 0.75, r * 0.26, off + 0.3 + (k / 8) * TAU, tint);
+  for (let k = 0; k < 6; k++) petal(r * 0.5, r * 0.22, off + 0.1 + (k / 6) * TAU, [tint[0], tint[0], tint[1]]);
+  // 花蕊 / 莲蓬
+  for (let k = 0; k < 26; k++) { const a = (k / 26) * TAU; g.strokeStyle = "#f2c94c"; g.lineWidth = 1; g.beginPath(); g.moveTo(Math.cos(a) * r * 0.14, Math.sin(a) * r * 0.14); g.lineTo(Math.cos(a) * r * 0.3, Math.sin(a) * r * 0.3); g.stroke(); }
+  const pod = g.createRadialGradient(-r * 0.04, -r * 0.04, 0, 0, 0, r * 0.16);
+  pod.addColorStop(0, "#e9e48a"); pod.addColorStop(1, "#b5b44a");
+  g.beginPath(); g.arc(0, 0, r * 0.16, 0, TAU); g.fillStyle = pod; g.fill();
+  for (let k = 0; k < 6; k++) { const a = (k / 6) * TAU; g.beginPath(); g.arc(Math.cos(a) * r * 0.08, Math.sin(a) * r * 0.08, r * 0.022, 0, TAU); g.fillStyle = "#8a8a35"; g.fill(); }
+  return { c, off: r + pad };
+}
+
+function layoutPads() {
+  pads = []; padsSeason = season;
+  const R = seededRandom(424242);
+  const r = (a = 1, b) => (b === undefined ? R() * a : a + R() * (b - a));
+  const clusters = clamp(Math.round(W * H / 220000) + 2, 4, 12);
+  const winter = season === "winter";
+  const flowerP = { spring: 0.12, summer: 0.5, autumn: 0.12, winter: 0 }[season];
+  const avoid = (x, y) => (x > W - 320 && y < 330) || (Math.abs(x - W / 2) < 150 && y < 90);
+  for (let c = 0; c < clusters; c++) {
+    let x, y, tries = 0;
+    do {
+      const side = (r(4)) | 0, along = r();
+      const inset = r(0.02, 0.16);
+      if (side === 0) { x = along * W; y = inset * H; }
+      else if (side === 1) { x = W - inset * W; y = along * H; }
+      else if (side === 2) { x = along * W; y = H - inset * H; }
+      else { x = inset * W; y = along * H; }
+    } while (avoid(x, y) && ++tries < 20);
+    if (avoid(x, y)) continue;
+    const n = winter ? 1 + ((r(2)) | 0) : 1 + ((r(4)) | 0);
+    for (let k = 0; k < n; k++) {
+      const pr = r(30, 66) * S * (k ? 0.75 : 1);
+      const a = r(TAU), d = k ? r(pr * 1.1, pr * 1.9) : 0;
+      const px = x + Math.cos(a) * d, py = y + Math.sin(a) * d;
+      const withered = winter && r() < 0.8;
+      const sprite = padSprite(pr, season, withered);
+      const pad = { x: px, y: py, r: pr, rot: r(TAU), seed: r(1000), sprite, flower: null };
+      if (!k && r() < flowerP) pad.flower = { s: flowerSprite(pr * r(0.5, 0.65), r() < 0.25 ? "white" : "pink"), dx: r(-0.2, 0.2) * pr, dy: r(-0.2, 0.2) * pr };
+      pads.push(pad);
+    }
+  }
+  // 浮萍
+  duckweed = [];
+  for (let k = 0; k < (winter ? 0 : 4); k++) {
+    const cx = r() < 0.5 ? r(0, W * 0.2) : r(W * 0.8, W), cy = r(H);
+    for (let i = 0; i < 40; i++) { const a = r(TAU), d = Math.sqrt(r()) * 60 * S; duckweed.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, r: r(1.5, 3.2) * S, rot: r(TAU) }); }
+  }
+}
+let duckweed = [];
+
+function drawPads(g, t, shadowPass) {
+  for (const p of pads) {
+    const bob = Math.sin(t * 0.4 + p.seed) * 0.04;
+    const dx = Math.sin(t * 0.13 + p.seed) * 2 * S, dy = Math.cos(t * 0.11 + p.seed) * 2 * S;
+    if (shadowPass) {
+      sctx.beginPath(); sctx.arc((p.x + dx + 14 * S) * SHADOW_SCALE, (p.y + dy + 20 * S) * SHADOW_SCALE, p.r * SHADOW_SCALE, 0, TAU);
+      sctx.globalAlpha = 0.55; sctx.fill(); continue;
+    }
+    g.save(); g.translate(p.x + dx, p.y + dy); g.rotate(p.rot + bob);
+    g.drawImage(p.sprite.c, -p.sprite.off, -p.sprite.off, p.sprite.c.width / DPR, p.sprite.c.height / DPR);
+    if (p.flower) {
+      g.rotate(-bob * 3);
+      g.drawImage(p.flower.s.c, p.flower.dx - p.flower.s.off, p.flower.dy - p.flower.s.off, p.flower.s.c.width / DPR, p.flower.s.c.height / DPR);
+    }
+    g.restore();
+  }
+  if (shadowPass) return;
+  g.fillStyle = "#7fae3c";
+  for (const d of duckweed) {
+    const x = d.x + Math.sin(t * 0.1 + d.rot) * 3, y = d.y + Math.cos(t * 0.09 + d.rot) * 3;
+    g.beginPath(); g.ellipse(x, y, d.r, d.r * 0.75, d.rot, 0, TAU); g.fill();
+  }
+}
+
+/* ============================================================
+   水面：涟漪、鱼食、落叶/花瓣、蜻蜓
+   ============================================================ */
+const ripples = [];
+function addRipple(x, y, maxR, strength = 1, life = 1.6) {
+  if (ripples.length > 140) ripples.shift();
+  ripples.push({ x, y, maxR, s: strength, life, age: 0 });
+}
+function drawRipples(g, dt) {
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const r = ripples[i]; r.age += dt;
+    const k = r.age / r.life;
+    if (k >= 1) { ripples.splice(i, 1); continue; }
+    const rad = r.maxR * Math.sqrt(k), a = (1 - k) * r.s;
+    g.lineWidth = Math.max(0.8, 2.2 * (1 - k)) * S;
+    g.strokeStyle = `rgba(255,255,255,${0.55 * a})`;
+    g.beginPath(); g.arc(r.x, r.y, rad, 0, TAU); g.stroke();
+    g.strokeStyle = `rgba(20,60,50,${0.25 * a})`;
+    g.beginPath(); g.arc(r.x + 1.2, r.y + 1.6, rad * 0.97, 0, TAU); g.stroke();
+    if (r.maxR > 30 * S && k > 0.15) {
+      g.strokeStyle = `rgba(255,255,255,${0.3 * a})`;
+      g.beginPath(); g.arc(r.x, r.y, rad * 0.62, 0, TAU); g.stroke();
+    }
+  }
+}
+
+const pellets = [];
+let feedsToday = 0, feedDay = new Date().toDateString();
+try { const s = JSON.parse(localStorage.getItem("banmu-feed") || "{}"); if (s.day === feedDay) feedsToday = s.n | 0; } catch (e) {}
+function feed(x, y) {
+  const n = 6 + ((Math.random() * 5) | 0);
+  for (let i = 0; i < n; i++) {
+    const a = rand(TAU), d = rand(4, 34) * S;
+    pellets.push({ x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, vx: Math.cos(a) * rand(4, 14) * S, vy: Math.sin(a) * rand(4, 14) * S, r: rand(3.6, 5) * Math.max(1, S), age: 0, eaten: false, hue: pick(["#b8742f", "#9c5f26", "#c98a3c", "#7e4f22"]) });
+  }
+  addRipple(x, y, 60 * S, 1, 2.2);
+  for (let i = 0; i < 4; i++) setTimeout(() => addRipple(x + rand(-20, 20) * S, y + rand(-20, 20) * S, rand(14, 26) * S, 0.8, 1.1), i * 90);
+  if (new Date().toDateString() !== feedDay) { feedDay = new Date().toDateString(); feedsToday = 0; }
+  feedsToday++;
+  try { localStorage.setItem("banmu-feed", JSON.stringify({ day: feedDay, n: feedsToday })); } catch (e) {}
+  updateWidgetText();
+  hideHintSoon(0);
+}
+function updatePellets(g, dt, t) {
+  for (let i = pellets.length - 1; i >= 0; i--) {
+    const p = pellets[i]; p.age += dt;
+    p.vx *= Math.exp(-dt * 1.5); p.vy *= Math.exp(-dt * 1.5);
+    p.x += p.vx * dt + Math.sin(t * 0.7 + i) * 0.6 * dt; p.y += p.vy * dt + 1.2 * S * dt;
+    if (p.eaten || p.age > 30) { pellets.splice(i, 1); continue; }
+    const fade = p.age > 26 ? (30 - p.age) / 4 : 1;
+    g.globalAlpha = fade;
+    // 刚落水时有个小小的弹落；投在水底的影子让鱼食更显眼
+    const pop = p.age < 0.25 ? 1 + (0.25 - p.age) * 2.4 : 1;
+    g.fillStyle = "rgba(10,35,28,0.28)"; g.beginPath(); g.arc(p.x + p.r * 0.9, p.y + p.r * 1.3, p.r * 1.05, 0, TAU); g.fill();
+    g.fillStyle = p.hue; g.beginPath(); g.arc(p.x, p.y, p.r * pop, 0, TAU); g.fill();
+    g.strokeStyle = "rgba(60,30,10,0.45)"; g.lineWidth = 0.8; g.stroke();
+    g.fillStyle = "rgba(255,240,210,0.55)"; g.beginPath(); g.arc(p.x - p.r * 0.3, p.y - p.r * 0.3, p.r * 0.38, 0, TAU); g.fill();
+  }
+  g.globalAlpha = 1;
+}
+
+// 季节漂浮物：秋天落叶、春天花瓣
+const floaters = [];
+function leafPath(g, kind, s) {
+  g.beginPath();
+  if (kind === "maple") {
+    for (let k = 0; k < 5; k++) {
+      const a = -Math.PI / 2 + (k - 2) * 0.62, l = s * (k === 2 ? 1 : k === 1 || k === 3 ? 0.85 : 0.6);
+      const a1 = a - 0.22, a2 = a + 0.22;
+      if (!k) g.moveTo(0, 0);
+      g.lineTo(Math.cos(a1) * l * 0.45, Math.sin(a1) * l * 0.45);
+      g.lineTo(Math.cos(a) * l, Math.sin(a) * l);
+      g.lineTo(Math.cos(a2) * l * 0.45, Math.sin(a2) * l * 0.45);
+    }
+    g.closePath();
+  } else if (kind === "ginkgo") {
+    g.moveTo(0, s * 0.3); g.lineTo(-s * 0.05, -s * 0.05);
+    g.quadraticCurveTo(-s * 0.9, -s * 0.35, -s * 0.6, -s * 0.85);
+    g.quadraticCurveTo(-s * 0.1, -s * 0.95, 0, -s * 0.72);
+    g.quadraticCurveTo(s * 0.1, -s * 0.95, s * 0.6, -s * 0.85);
+    g.quadraticCurveTo(s * 0.9, -s * 0.35, s * 0.05, -s * 0.05);
+    g.closePath();
+  } else { // petal
+    g.moveTo(0, s * 0.5);
+    g.bezierCurveTo(-s * 0.6, 0, -s * 0.4, -s * 0.6, -s * 0.08, -s * 0.5);
+    g.lineTo(0, -s * 0.38); g.lineTo(s * 0.08, -s * 0.5);
+    g.bezierCurveTo(s * 0.4, -s * 0.6, s * 0.6, 0, 0, s * 0.5);
+  }
+}
+function spawnFloater(onScreen) {
+  const kind = season === "autumn" ? (Math.random() < 0.55 ? "maple" : "ginkgo") : "petal";
+  const col = kind === "maple" ? pick(["#c8432a", "#d9622b", "#b8361f", "#e08a2e"]) : kind === "ginkgo" ? pick(["#e9c03a", "#dcae2c", "#f0cf55"]) : pick(["#f7c9d4", "#f3b6c6", "#fbe0e6"]);
+  const x = onScreen ? rand(W) : rand(W), y = onScreen ? rand(H) : rand(H);
+  floaters.push({ kind, col, x, y, rot: rand(TAU), vr: rand(-0.08, 0.08), s: (kind === "petal" ? rand(6, 9) : rand(16, 24)) * S, age: onScreen ? 10 : 0, life: rand(80, 160), seed: rand(1000) });
+  if (!onScreen) addRipple(x, y, 26 * S, 0.7, 1.4);
+}
+function updateFloaters(g, dt, t, shadowPass) {
+  if (shadowPass) {
+    for (const f of floaters) { sctx.globalAlpha = 0.35; sctx.beginPath(); sctx.arc((f.x + 6 * S) * SHADOW_SCALE, (f.y + 9 * S) * SHADOW_SCALE, f.s * 0.6 * SHADOW_SCALE, 0, TAU); sctx.fill(); }
+    return;
+  }
+  const want = season === "autumn" ? 12 : season === "spring" ? 22 : 0;
+  if (floaters.length < want && Math.random() < dt * 0.08) spawnFloater(false);
+  for (let i = floaters.length - 1; i >= 0; i--) {
+    const f = floaters[i]; f.age += dt;
+    f.x += Math.sin(t * 0.05 + f.seed) * 3 * S * dt + 1.5 * S * dt; f.y += Math.cos(t * 0.04 + f.seed) * 2.5 * S * dt;
+    f.rot += f.vr * dt;
+    if (f.age > f.life || f.x > W + 40) { floaters.splice(i, 1); continue; }
+    const a = Math.min(1, f.age / 1.5, (f.life - f.age) / 6);
+    g.save(); g.translate(f.x, f.y); g.rotate(f.rot); g.globalAlpha = a * 0.95;
+    leafPath(g, f.kind, f.s); g.fillStyle = f.col; g.fill();
+    if (f.kind !== "petal") { g.strokeStyle = "rgba(90,40,10,0.35)"; g.lineWidth = 0.8; g.beginPath(); g.moveTo(0, f.s * 0.35); g.lineTo(0, -f.s * 0.7); g.stroke(); }
+    g.restore();
+  }
+}
+
+// 蜻蜓
+let dragonfly = null, nextDragonfly = 25;
+function updateDragonfly(g, dt, t, light, wk) {
+  if (!dragonfly) {
+    nextDragonfly -= dt;
+    if (nextDragonfly < 0 && light > 0.5 && (wk === "clear" || wk === "cloudy") && season !== "winter") {
+      const fromLeft = Math.random() < 0.5;
+      dragonfly = { x: fromLeft ? -40 : W + 40, y: rand(H * 0.15, H * 0.85), tx: rand(W * 0.2, W * 0.8), ty: rand(H * 0.2, H * 0.8), hover: 0, hops: 3 + ((Math.random() * 4) | 0), a: 0, flap: 0, col: pick(["#c0392b", "#2f78b5", "#2e9b74"]) };
+    }
+    return;
+  }
+  const d = dragonfly;
+  d.flap += dt * 60;
+  if (d.hover > 0) {
+    d.hover -= dt;
+    d.x += Math.sin(t * 7) * 0.3; d.y += Math.cos(t * 6) * 0.3;
+    if (d.hover <= 0) {
+      if (Math.random() < 0.5) addRipple(d.x, d.y, 14 * S, 0.8, 1); // 点水
+      d.hops--;
+      if (d.hops <= 0) { d.tx = Math.random() < 0.5 ? -80 : W + 80; d.ty = rand(H); }
+      else { d.tx = clamp(d.x + rand(-300, 300) * S, 60, W - 60); d.ty = clamp(d.y + rand(-220, 220) * S, 60, H - 60); }
+    }
+  } else {
+    const dx = d.tx - d.x, dy = d.ty - d.y, dist = Math.hypot(dx, dy);
+    d.a = Math.atan2(dy, dx);
+    const sp = Math.min(dist * 3, 340 * S);
+    d.x += (dx / (dist || 1)) * sp * dt; d.y += (dy / (dist || 1)) * sp * dt;
+    if (dist < 3) { if (d.hops <= 0) { dragonfly = null; nextDragonfly = rand(40, 100); return; } d.hover = rand(1.2, 3.5); }
+  }
+  // 影子（在水底，离得远）
+  const sx = d.x + 34 * S, sy = d.y + 48 * S, s = 18 * S;
+  g.save(); g.translate(sx, sy); g.rotate(d.a); g.fillStyle = "rgba(10,30,25,0.12)";
+  g.beginPath(); g.ellipse(0, 0, s, s * 0.12, 0, 0, TAU); g.ellipse(s * 0.3, 0, s * 0.12, s * 0.9, 0, 0, TAU); g.fill(); g.restore();
+  // 本体
+  g.save(); g.translate(d.x, d.y); g.rotate(d.a);
+  const flick = 0.5 + 0.5 * Math.sin(d.flap);
+  g.fillStyle = `rgba(230,240,255,${0.18 + 0.2 * flick})`; g.strokeStyle = "rgba(60,70,80,0.35)"; g.lineWidth = 0.5;
+  for (const [ox, ang, l] of [[s * 0.35, 1.45, 0.95], [s * 0.35, -1.45, 0.95], [s * 0.15, 1.75, 0.85], [s * 0.15, -1.75, 0.85]]) {
+    g.save(); g.translate(ox, 0); g.rotate(ang + (flick - 0.5) * 0.25 * Math.sign(ang));
+    g.beginPath(); g.ellipse(s * l * 0.5, 0, s * l * 0.5, s * 0.12, 0, 0, TAU); g.fill(); g.stroke(); g.restore();
+  }
+  g.fillStyle = d.col; g.beginPath(); g.ellipse(-s * 0.25, 0, s * 0.7, s * 0.05, 0, 0, TAU); g.fill();
+  g.fillStyle = "#3b4a3f"; g.beginPath(); g.ellipse(s * 0.33, 0, s * 0.16, s * 0.08, 0, 0, TAU); g.fill();
+  g.fillStyle = "#4b3a2a"; g.beginPath(); g.arc(s * 0.52, -s * 0.05, s * 0.07, 0, TAU); g.arc(s * 0.52, s * 0.05, s * 0.07, 0, TAU); g.fill();
+  g.restore();
+}
+
+/* ============================================================
+   天气粒子：雨、雪、闪电
+   ============================================================ */
+const drops = [], flakes = [];
+let flash = 0, flashRise = 0, nextBolt = 8;
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+function updateWeather(g, dt, wk) {
+  const rainy = wk === "rain" || wk === "storm";
+  if (rainy) {
+    const rate = (wk === "storm" ? 90 : 38) * (W * H / 1.3e6);
+    let n = rate * dt; while (n > 0) { if (Math.random() < n) { addRipple(rand(W), rand(H), rand(8, 22) * S, rand(0.5, 0.9), rand(0.6, 1.0)); drops.push({ x: rand(W), y: rand(H), life: 0.12 }); } n -= 1; }
+    g.strokeStyle = "rgba(235,245,255,0.35)"; g.lineWidth = 1;
+    for (let i = drops.length - 1; i >= 0; i--) {
+      const d = drops[i]; d.life -= dt; if (d.life <= 0) { drops.splice(i, 1); continue; }
+      g.beginPath(); g.moveTo(d.x, d.y); g.lineTo(d.x - 3 * S, d.y - 10 * S); g.stroke();
+    }
+  } else drops.length = 0;
+  if (wk === "storm") {
+    nextBolt -= dt;
+    if (nextBolt < 0) { if (!reduceMotion) flashRise = 1; nextBolt = rand(14, 30); }
+  }
+  if (wk === "snow") {
+    const want = Math.round(160 * (W * H / 1.3e6));
+    while (flakes.length < want) flakes.push({ x: rand(W), y: rand(H), z: rand(0.2, 1), vx: rand(-8, 8), seed: rand(1000) });
+    for (let i = flakes.length - 1; i >= 0; i--) {
+      const f = flakes[i];
+      f.z -= dt * 0.09; f.x += (f.vx + Math.sin(f.seed + f.z * 8) * 10) * S * dt; f.y += 6 * S * dt;
+      if (f.z <= 0) { addRipple(f.x, f.y, 6 * S, 0.5, 0.6); flakes.splice(i, 1); continue; }
+      const r = (1.2 + f.z * 3.4) * S;
+      g.fillStyle = `rgba(255,255,255,${0.45 + 0.4 * (1 - f.z)})`;
+      g.beginPath(); g.arc(f.x, f.y, r, 0, TAU); g.fill();
+    }
+  } else flakes.length = 0;
+}
+
+/* ============================================================
+   夜晚：萤火虫、月影
+   ============================================================ */
+const fireflies = Array.from({ length: 16 }, () => ({ x: rand(), y: rand(), vx: 0, vy: 0, seed: rand(1000) }));
+function drawNight(g, t, dt, night) {
+  if (night < 0.05) return;
+  // 月亮倒影：一团柔光 + 被水波打碎的光条
+  const moon = smooth(clamp((night - 0.45) / 0.4, 0, 1));
+  if (moon > 0.01) {
+    const mx = W * 0.27, my = H * 0.3, mr = 46 * S;
+    const mg = g.createRadialGradient(mx, my, 0, mx, my, mr * 3.2);
+    mg.addColorStop(0, `rgba(235,240,255,${0.2 * moon})`); mg.addColorStop(0.3, `rgba(220,230,255,${0.07 * moon})`); mg.addColorStop(1, "rgba(220,230,255,0)");
+    g.fillStyle = mg; g.fillRect(mx - mr * 3.2, my - mr * 3.2, mr * 6.4, mr * 6.4);
+    g.lineCap = "round";
+    for (let k = 0; k < 11; k++) {
+      const c = (k - 5) / 5, yy = my + c * mr * 0.95 + Math.sin(t * 0.8 + k) * 2 * S;
+      const len = mr * (1 - c * c * 0.75) * (0.55 + 0.45 * Math.abs(Math.sin(k * 2.7 + t * 0.35)));
+      const xo = Math.sin(t * 0.6 + k * 2.3) * mr * 0.22;
+      g.strokeStyle = `rgba(245,247,255,${(0.22 + 0.25 * Math.abs(Math.sin(k * 1.9 + t * 0.5))) * moon})`;
+      g.lineWidth = mr * (0.05 + 0.04 * (1 - Math.abs(c)));
+      g.beginPath(); g.moveTo(mx + xo - len / 2, yy);
+      g.quadraticCurveTo(mx + xo, yy + Math.sin(t * 1.4 + k) * 3 * S, mx + xo + len / 2, yy); g.stroke();
+    }
+  }
+  // 萤火虫
+  for (const f of fireflies) {
+    f.vx += rand(-1, 1) * dt * 0.02; f.vy += rand(-1, 1) * dt * 0.02;
+    f.vx *= 0.98; f.vy *= 0.98; f.x = (f.x + f.vx * dt + 1) % 1; f.y = (f.y + f.vy * dt + 1) % 1;
+    const blink = Math.max(0, Math.sin(t * 1.3 + f.seed)) ** 3 * night;
+    if (blink < 0.02) continue;
+    const x = f.x * W, y = f.y * H, rr = 14 * S;
+    const fg = g.createRadialGradient(x, y, 0, x, y, rr);
+    fg.addColorStop(0, `rgba(240,255,170,${0.9 * blink})`); fg.addColorStop(0.2, `rgba(210,255,120,${0.35 * blink})`); fg.addColorStop(1, "rgba(200,255,120,0)");
+    g.fillStyle = fg; g.fillRect(x - rr, y - rr, rr * 2, rr * 2);
+  }
+}
+
+/* ============================================================
+   主循环
+   ============================================================ */
+let readySent = false;
+let last = performance.now(), T = 0, paused = false, rafId = 0, lastDraw = 0;
+const glints = Array.from({ length: 26 }, () => ({ x: rand(), y: rand(), seed: rand(1000) }));
+
+function frame(now) {
+  rafId = requestAnimationFrame(frame);
+  const minGap = 1000 / (config.fps || 60) - 2;
+  if (now - lastDraw < minGap) return;
+  lastDraw = now;
+  let dt = Math.min(0.05, (now - last) / 1000); last = now; T += dt;
+  step(dt, T);
+  if (!readySent) { readySent = true; post({ type: "ready" }); }
+}
+
+function step(dt, t) {
+  const s = currentSeason();
+  if (s !== season) { season = s; paintBottom(); layoutPads(); floaters.length = 0; updateWidgetText(); }
+  const { light, dusk } = daylight();
+  const wk = weatherKind();
+  const sunny = wk === "clear" ? 1 : wk === "cloudy" ? 0.45 : wk === "snow" ? 0.35 : 0.25;
+
+  // 空间网格（邻居查询）
+  const grid = new Map();
+  for (const f of fishes) { const k = ((f.x / 160) | 0) * 10007 + ((f.y / 160) | 0); let c = grid.get(k); if (!c) grid.set(k, (c = [])); c.push(f); }
+  for (const f of fishes) updateFish(f, dt, t, grid);
+  for (const tu of turtles) updateTurtle(tu, dt, t);
+  pointer.speed *= Math.exp(-dt * 6);
+
+  const g = ctx;
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.globalCompositeOperation = "source-over"; g.globalAlpha = 1;
+
+  // 1 池底
+  g.drawImage(bottomCanvas, 0, 0, W, H);
+  // 2 焦散
+  drawCaustics(t, (0.35 + 0.65 * light) * sunny * (season === "winter" ? 0.75 : 1));
+  g.globalAlpha = 0.9; g.drawImage(causticCanvas, 0, 0, W, H); g.globalAlpha = 1;
+
+  // 3 影子（低分辨率画布，放大后自然柔化）
+  sctx.setTransform(1, 0, 0, 1, 0, 0); sctx.clearRect(0, 0, shadowCanvas.width, shadowCanvas.height);
+  sctx.fillStyle = "#0b2a22";
+  for (const f of fishes) { spine(f); drawFishShadow(f); }
+  for (const tu of turtles) drawTurtle(tu, null, true);
+  drawPads(null, t, true);
+  updateFloaters(null, 0, t, true);
+  sctx.globalAlpha = 1;
+  g.globalAlpha = 0.32 + 0.18 * sunny; g.drawImage(shadowCanvas, 0, 0, W, H); g.globalAlpha = 1;
+
+  // 4 鱼和龟（深的先画）
+  const swimmers = [...fishes, ...turtles].sort((a, b) => b.depth - a.depth);
+  for (const o of swimmers) { if (o instanceof Fish) drawFish(o, g); else drawTurtle(o, g, false); }
+
+  // 5 水体薄纱 + 天光
+  g.fillStyle = "rgba(96, 156, 140, 0.09)"; g.fillRect(0, 0, W, H);
+  const sky = g.createLinearGradient(0, 0, W, H);
+  sky.addColorStop(0, `rgba(235,248,240,${0.12 * light})`); sky.addColorStop(0.45, "rgba(235,248,240,0)"); sky.addColorStop(1, `rgba(20,60,55,${0.08})`);
+  g.fillStyle = sky; g.fillRect(0, 0, W, H);
+  // 粼粼波光
+  if (light > 0.2 && sunny > 0.4) {
+    for (const gl of glints) {
+      const tw = Math.max(0, Math.sin(t * 1.7 + gl.seed)) ** 6;
+      if (tw < 0.05) continue;
+      g.fillStyle = `rgba(255,255,245,${0.55 * tw * light * sunny})`;
+      g.beginPath(); g.ellipse(gl.x * W + Math.sin(t * 0.2 + gl.seed) * 20, gl.y * H, 5 * S * tw, 1.4 * S, -0.5, 0, TAU); g.fill();
+    }
+  }
+
+  // 6 水面上的东西
+  drawRipples(g, dt);
+  updatePellets(g, dt, t);
+  updateFloaters(g, dt, t, false);
+  drawPads(g, t, false);
+  updateDragonfly(g, dt, t, light, wk);
+  updateWeather(g, dt, wk);
+
+  // 7 光照：阴天、黄昏、夜晚
+  if (sunny < 1) { g.fillStyle = `rgba(70,85,95,${(1 - sunny) * 0.16})`; g.fillRect(0, 0, W, H); }
+  if (dusk > 0.01) { g.fillStyle = `rgba(255,150,80,${0.12 * dusk})`; g.fillRect(0, 0, W, H); }
+  const night = 1 - light;
+  if (night > 0.01) {
+    g.globalCompositeOperation = "multiply";
+    g.fillStyle = mix("#ffffff", "#27365e", night * 0.92); g.fillRect(0, 0, W, H);
+    g.globalCompositeOperation = "source-over";
+  }
+  drawNight(g, t, dt, night);
+  if (season === "winter") { g.fillStyle = "rgba(220,235,245,0.06)"; g.fillRect(0, 0, W, H); }
+  if (flashRise > 0) { flash = Math.min(1, flash + dt * 4); if (flash >= 1) flashRise = 0; }
+  else if (flash > 0) flash = Math.max(0, flash - dt * 1.2);
+  if (flash > 0) { g.fillStyle = `rgba(235,242,255,${smooth(flash) * 0.14})`; g.fillRect(0, 0, W, H); }
+}
+
+/* ============================================================
+   小组件
+   ============================================================ */
+const $ = (id) => document.getElementById(id);
+const WEEK = "日一二三四五六";
+const ICONS = {
+  clear: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5" fill="#ffd66b"/><g stroke="#ffe7a1" stroke-width="1.6" stroke-linecap="round"><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></g></svg>',
+  cloudy: '<svg viewBox="0 0 24 24"><circle cx="8.5" cy="9" r="3.3" fill="#ffd66b"/><path d="M7 18.5h10a3.6 3.6 0 0 0 .3-7.2 5 5 0 0 0-9.5 1.3A3 3 0 0 0 7 18.5Z" fill="#f2f5f7"/></svg>',
+  overcast: '<svg viewBox="0 0 24 24"><path d="M6.5 18.5h11a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.4 1.4 3.3 3.3 0 0 0-.9 6.6Z" fill="#dfe6ea"/></svg>',
+  rain: '<svg viewBox="0 0 24 24"><path d="M6.5 14.5h11a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.4 1.4 3.3 3.3 0 0 0-.9 6.6Z" fill="#dfe6ea"/><g stroke="#9fd0ff" stroke-width="1.6" stroke-linecap="round"><path d="M8 17l-1 3M12 17l-1 3M16 17l-1 3"/></g></svg>',
+  snow: '<svg viewBox="0 0 24 24"><path d="M6.5 14.5h11a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.4 1.4 3.3 3.3 0 0 0-.9 6.6Z" fill="#eef3f6"/><g fill="#fff"><circle cx="8" cy="18.5" r="1.2"/><circle cx="12" cy="20" r="1.2"/><circle cx="16" cy="18.5" r="1.2"/></g></svg>',
+  storm: '<svg viewBox="0 0 24 24"><path d="M6.5 14h11a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.4 1.4 3.3 3.3 0 0 0-.9 6.6Z" fill="#cfd8de"/><path d="M12.5 13.5l-3 5h2.6l-1.2 4 4-6h-2.6l1.4-3Z" fill="#ffd66b"/></svg>',
+  fog: '<svg viewBox="0 0 24 24"><g stroke="#e8eef1" stroke-width="1.8" stroke-linecap="round"><path d="M4 9h16M6 13h12M4 17h16"/></g></svg>',
+};
+// WMO 天气代码 → (视觉效果, 图标, 中文)
+function wmo(code) {
+  if (code === 0) return ["clear", "clear", "晴"];
+  if (code <= 2) return ["clear", "cloudy", "少云"];
+  if (code === 3) return ["cloudy", "overcast", "阴"];
+  if (code === 45 || code === 48) return ["cloudy", "fog", "雾"];
+  if (code >= 51 && code <= 57) return ["rain", "rain", "毛毛雨"];
+  if (code >= 61 && code <= 67) return ["rain", "rain", code >= 65 ? "大雨" : code >= 63 ? "中雨" : "小雨"];
+  if (code >= 71 && code <= 77) return ["snow", "snow", code >= 75 ? "大雪" : "小雪"];
+  if (code >= 80 && code <= 82) return ["rain", "rain", "阵雨"];
+  if (code === 85 || code === 86) return ["snow", "snow", "阵雪"];
+  if (code >= 95) return ["storm", "storm", "雷阵雨"];
+  return ["cloudy", "overcast", "多云"];
+}
+const MODE_LABEL = { clear: ["clear", "晴"], cloudy: ["overcast", "阴"], rain: ["rain", "雨"], snow: ["snow", "雪"], storm: ["storm", "雷雨"] };
+
+function updateClock() {
+  const d = new Date();
+  $("clock").textContent = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  $("date").textContent = `${d.getMonth() + 1}月${d.getDate()}日 · 星期${WEEK[d.getDay()]}`;
+}
+function updateWidgetText() {
+  $("pondName").textContent = config.name || "半亩塘";
+  $("plaque").classList.toggle("hidden", !config.showTitle);
+  $("journal").classList.toggle("hidden", !config.showWidget);
+  $("season").textContent = `${SEASON_CN[season]} · 锦鲤 ${fishes.length} 尾`;
+  $("feedStat").textContent = `今日喂食 ${feedsToday} 次`;
+  const cityName = config.city ? config.city.name : "未设城市";
+  let iconKey = "clear", text;
+  if (config.weatherMode !== "auto") {
+    const [ic, cn] = MODE_LABEL[config.weatherMode]; iconKey = ic;
+    text = `<span class="city" id="cityName">${esc(cityName)}</span> · <b>${cn}</b>（演示）`;
+  } else if (!config.city) {
+    text = `<span class="city" id="cityName">设置城市</span> · 让窗外的天气来到池塘`;
+  } else if (weather.error && weather.temp == null) {
+    text = `<span class="city" id="cityName">${esc(cityName)}</span> · 天气暂不可用`;
+  } else if (weather.temp != null) {
+    const [, ic, cn] = wmo(weather.code); iconKey = ic;
+    text = `<span class="city" id="cityName">${esc(cityName)}</span> · <b>${cn} ${Math.round(weather.temp)}°</b>`;
+  } else text = `<span class="city" id="cityName">${esc(cityName)}</span> · 读取天气中…`;
+  $("nowIcon").innerHTML = ICONS[iconKey];
+  $("nowText").innerHTML = text;
+  const fc = $("forecast");
+  if (config.city && weather.daily.length) {
+    fc.style.display = "";
+    fc.innerHTML = weather.daily.slice(0, 3).map((d, i) => {
+      const [, ic] = wmo(d.code), dd = new Date(d.date + "T12:00:00");
+      return `<div>${i === 0 ? "今天" : "周" + WEEK[dd.getDay()]}${ICONS[ic]}${Math.round(d.min)}° / ${Math.round(d.max)}°</div>`;
+    }).join("");
+  } else { fc.style.display = "none"; fc.innerHTML = ""; }
+  const cityEl = $("cityName");
+  if (cityEl && !HOST) cityEl.onclick = () => { const q = prompt("输入城市名（中文或拼音），如：杭州"); if (q) searchCity(q); };
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+async function fetchWeather() {
+  if (!config.city) { weather.kind = "clear"; updateWidgetText(); return; }
+  const { lat, lon } = config.city;
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(2)}&longitude=${lon.toFixed(2)}&current=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset&timezone=auto&forecast_days=4`;
+    const r = await fetch(url); if (!r.ok) throw new Error(r.status);
+    const j = await r.json();
+    weather.code = j.current.weather_code; weather.temp = j.current.temperature_2m;
+    weather.kind = wmo(weather.code)[0];
+    weather.daily = j.daily.time.map((date, i) => ({ date, code: j.daily.weather_code[i], max: j.daily.temperature_2m_max[i], min: j.daily.temperature_2m_min[i] }));
+    const toH = (s) => { const d = new Date(s); return d.getHours() + d.getMinutes() / 60; };
+    if (j.daily.sunrise && j.daily.sunrise[0]) sunTimes = { rise: toH(j.daily.sunrise[0]), set: toH(j.daily.sunset[0]) };
+    weather.error = null; weather.updated = Date.now();
+  } catch (e) { weather.error = String(e); }
+  updateWidgetText();
+}
+async function searchCity(q) {
+  try {
+    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=1&language=zh&format=json`);
+    const j = await r.json();
+    if (!j.results || !j.results.length) { post({ type: "cityResult", ok: false, query: q }); if (!HOST) alert("没找到这个城市，换个写法试试"); return; }
+    const c = j.results[0];
+    config.city = { name: c.name, lat: c.latitude, lon: c.longitude };
+    saveLocal(); post({ type: "cityResult", ok: true, city: config.city, detail: [c.admin1, c.country].filter(Boolean).join("，") });
+    weather.temp = null; weather.daily = []; updateWidgetText(); fetchWeather();
+  } catch (e) { post({ type: "cityResult", ok: false, query: q, error: String(e) }); }
+}
+
+let hintTimer = 0;
+function hideHintSoon(ms) { clearTimeout(hintTimer); hintTimer = setTimeout(() => $("hint").classList.add("hidden"), ms); }
+
+/* ============================================================
+   交互：宿主转发 or 浏览器原生
+   ============================================================ */
+function overWidget(x, y) {
+  for (const id of ["journal", "plaque"]) {
+    const el = $(id); if (el.classList.contains("hidden")) continue;
+    const r = el.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true;
+  }
+  return false;
+}
+let lastMoveRipple = 0;
+function onPointer(x, y, type) {
+  const now = T;
+  if (type === "move") {
+    const dtm = Math.max(0.008, now - pointer.last);
+    if (pointer.last > 0 && now - pointer.last < 0.5) { pointer.speed = Math.max(pointer.speed, Math.hypot(x - pointer.x, y - pointer.y) / dtm); }
+    pointer.x = x; pointer.y = y; pointer.last = now;
+    // 指针划过水面，偶尔留下一圈小涟漪
+    if (now - lastMoveRipple > 0.35 && pointer.speed > 120 && !overWidget(x, y)) { lastMoveRipple = now; addRipple(x, y, 16 * S, 0.45, 0.9); }
+  } else if (type === "down") {
+    pointer.x = x; pointer.y = y; pointer.last = now;
+    if (!overWidget(x, y)) feed(x, y);
+  } else if (type === "leave") {
+    pointer.last = -1e9;
+  }
+}
+if (!HOST) {
+  addEventListener("pointermove", (e) => onPointer(e.clientX, e.clientY, "move"));
+  addEventListener("pointerdown", (e) => { if (e.target.closest(".journal .city")) return; onPointer(e.clientX, e.clientY, "down"); });
+  document.addEventListener("pointerleave", () => onPointer(0, 0, "leave"));
+}
+
+/* ---------- 给宿主的接口 ---------- */
+window.pond = {
+  pointer: (x, y, type) => onPointer(x, y, type),
+  setConfig(c) {
+    const oldQ = config.quality, oldCity = JSON.stringify(config.city), oldSeason = config.seasonMode;
+    Object.assign(config, c || {});
+    saveLocal();
+    if (oldQ !== config.quality) resize();
+    if (oldSeason !== config.seasonMode) { season = currentSeason(); paintBottom(); layoutPads(); floaters.length = 0; }
+    syncFishCount();
+    if (JSON.stringify(config.city) !== oldCity) { weather.temp = null; weather.daily = []; fetchWeather(); }
+    updateWidgetText();
+  },
+  searchCity: (q) => searchCity(q),
+  pause(p) {
+    paused = !!p;
+    cancelAnimationFrame(rafId);
+    if (!paused) { last = performance.now(); rafId = requestAnimationFrame(frame); }
+  },
+  feed: (x, y) => feed(x ?? W / 2, y ?? H / 2),
+  getConfig: () => ({ ...config }),
+};
+
+/* ---------- 启动 ---------- */
+resize();
+syncFishCount();
+for (let i = 0; i < 2; i++) turtles.push(makeTurtle());
+if (season === "autumn" || season === "spring") for (let i = 0; i < (season === "autumn" ? 8 : 14); i++) spawnFloater(true);
+for (const f of fishes) f.alpha = 1;
+updateClock(); updateWidgetText();
+setInterval(updateClock, 5000);
+setInterval(() => { if (Date.now() - weather.updated > 30 * 60 * 1000) fetchWeather(); }, 60 * 1000);
+fetchWeather();
+hideHintSoon(12000);
+addEventListener("resize", () => { causticPatterns = null; resize(); step(0, T); });
+document.addEventListener("visibilitychange", () => { if (!HOST) window.pond.pause(document.hidden); });
+rafId = requestAnimationFrame(frame);
+</script>
+</body>
+</html>
