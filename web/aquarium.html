@@ -39,6 +39,7 @@ const TAU = Math.PI * 2;
 const rand = (a = 1, b) => (b === undefined ? Math.random() * a : a + Math.random() * (b - a));
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (t) => t * t * (3 - 2 * t);
 const pick = (a) => a[(Math.random() * a.length) | 0];
 function hexRgb(h) {
   if (h[0] !== "#") { const m = h.match(/\d+(\.\d+)?/g).map(Number); return [m[0], m[1], m[2]]; } // 也接受 rgb(...) 写法
@@ -595,6 +596,92 @@ function buildSprite(f) {
   g.fillStyle = "rgba(30,5,0,0.6)"; g.beginPath(); g.ellipse(1.02 * s, 0.27 * s, 0.025 * s, 0.018 * s, 0.3, 0, TAU); g.fill();
 
   f.sprite = { c, ox, oy };
+  f.front = buildFront(f);
+}
+
+/* ---------- 正面像：转身转到一半时，鱼正对着你 ---------- */
+function buildFront(f) {
+  const s = f.s, v = f.v, R = seeded(f.seed + 7), r = (a, b) => a + R() * (b - a);
+  const o = 1.15 * s;
+  const c = makeCanvas(2 * o * DPR, 2 * o * DPR), g = c.getContext("2d");
+  g.scale(DPR, DPR); g.translate(o, o);
+  const head = v.head || v.body;
+  const body = new Path2D(); body.ellipse(0, 0.04 * s, 0.84 * s, 0.95 * s, 0, 0, TAU);
+  g.save(); g.clip(body);
+  const base = g.createLinearGradient(0, -s, 0, s);
+  base.addColorStop(0, mix(v.body, "#000000", 0.12)); base.addColorStop(0.5, v.body); base.addColorStop(1, v.belly || v.body);
+  g.fillStyle = base; g.fillRect(-o, -o, 2 * o, 2 * o);
+  for (const p of v.parts || []) {
+    if (p.t === "back" || p.t === "belly") {
+      const path = new Path2D(), yb = p.y * s, sign = p.t === "back" ? -1 : 1;
+      path.moveTo(-o, sign * o);
+      for (let x = -1.1; x <= 1.1; x += 0.1) path.lineTo(x * s, yb + Math.sin(x * 5) * 0.05 * s);
+      path.lineTo(o, sign * o); path.closePath();
+      softFill(g, path, p.c, s * 0.08);
+    } else if (p.t === "stripe") {
+      const path = new Path2D(); path.ellipse(0, -0.75 * s, 0.32 * s, 0.4 * s, 0, 0, TAU);
+      softFill(g, path, p.c, s * 0.06);
+    } else if (p.t === "tiger") {
+      for (let i = 0; i < Math.ceil(p.n * 0.6); i++) {
+        const x = r(-0.8, 0.7) * s, w = r(0.06, 0.12) * s, path = new Path2D();
+        path.moveTo(x, -s); for (let y = -1; y <= 1; y += 0.2) path.lineTo(x + Math.sin(y * 4 + i) * 0.07 * s, y * s);
+        for (let y = 1; y >= -1; y -= 0.2) path.lineTo(x + w + Math.sin(y * 4 + i + 1) * 0.07 * s, y * s);
+        path.closePath(); softFill(g, path, p.c, s * 0.04);
+      }
+    } else {
+      const small = p.t === "spots", n = Math.ceil(p.n * 0.7);
+      for (let i = 0; i < n; i++) {
+        const a = r(0, TAU), d = Math.sqrt(R()) * 0.8, rr = r(p.r[0], p.r[1]) * s;
+        softFill(g, blobPath(Math.cos(a) * d * 0.84 * s, Math.sin(a) * d * 0.95 * s, rr, R, small ? 7 : 11, r(0.7, 1.1)), p.c, small ? s * 0.012 : s * 0.035);
+      }
+    }
+  }
+  // 体积感
+  const ao = g.createRadialGradient(-0.1 * s, -0.25 * s, 0, 0, 0, 1.0 * s);
+  ao.addColorStop(0, "rgba(0,0,0,0)"); ao.addColorStop(0.6, "rgba(0,0,0,0)"); ao.addColorStop(1, "rgba(10,5,0,0.45)");
+  g.fillStyle = ao; g.fillRect(-o, -o, 2 * o, 2 * o);
+  const top = g.createRadialGradient(-0.15 * s, -0.6 * s, 0, -0.15 * s, -0.6 * s, 0.7 * s);
+  top.addColorStop(0, "rgba(255,255,255,0.3)"); top.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = top; g.fillRect(-o, -o, 2 * o, 2 * o);
+  g.strokeStyle = "rgba(255,255,255,0.2)"; g.lineWidth = 0.07 * s; g.stroke(body);
+  g.restore();
+
+  // 头瘤：正面看是一大团，两边腮帮鼓起
+  const k = f.wen;
+  const col0 = v.headMode === "cap" ? head : v.headMode ? head : mix(v.body, head, 0.6);
+  const mass = new Path2D(); mass.ellipse(0, -0.1 * s, 0.66 * s * k, 0.6 * s * k, 0, 0, TAU);
+  const mg = g.createRadialGradient(-0.1 * s, -0.35 * s, 0.05 * s, 0, -0.1 * s, 0.7 * s * k);
+  mg.addColorStop(0, mix(col0, "#ffffff", 0.14)); mg.addColorStop(0.75, col0); mg.addColorStop(1, mix(col0, "#2a0e00", 0.08));
+  g.save(); g.clip(body); g.fillStyle = mg; g.fill(mass); g.restore();
+  const lobes = [
+    { n: "cheek", x: -0.42, y: 0.12, rx: 0.28, ry: 0.32 }, { n: "cheek", x: 0.42, y: 0.12, rx: 0.28, ry: 0.32 },
+    { n: "hood2", x: -0.34, y: -0.4, rx: 0.26, ry: 0.24 }, { n: "hood2", x: 0.34, y: -0.4, rx: 0.26, ry: 0.24 },
+    { n: "hood", x: 0, y: -0.56, rx: 0.4, ry: 0.25 },
+    { n: "chin", x: 0, y: 0.34, rx: 0.22, ry: 0.14 }, { n: "snout", x: 0, y: -0.06, rx: 0.2, ry: 0.2 },
+  ];
+  for (const L of lobes) {
+    const x = L.x * s * k, y = L.y * s * (0.9 + 0.1 * k), rx = L.rx * s * k, ry = L.ry * s * k;
+    const col = v.headMode === "cap" ? (L.n === "hood" || L.n === "hood2" ? v.cap : head) : col0;
+    const lg = g.createRadialGradient(x - rx * 0.35, y - ry * 0.45, Math.min(rx, ry) * 0.1, x, y, Math.max(rx, ry) * 1.05);
+    lg.addColorStop(0, mix(col, "#ffffff", 0.2)); lg.addColorStop(0.65, col); lg.addColorStop(1, rgba(hexOf(mix(col, "#2a0e00", 0.14)), 0));
+    g.fillStyle = lg; g.beginPath(); g.ellipse(x, y, rx * 1.12, ry * 1.12, 0, 0, TAU); g.fill();
+  }
+  // 两只眼睛
+  for (const side of [-1, 1]) {
+    const ex = side * 0.46 * s, ey = -0.04 * s, er = 0.07 * s;
+    if (v.eyePatch) softFill(g, blobPath(ex, ey, 0.16 * s, R, 9, 0.9), "#1c1c20", s * 0.03);
+    const sock = g.createRadialGradient(ex, ey, er * 0.5, ex, ey, er * 2);
+    sock.addColorStop(0, "rgba(40,10,0,0.45)"); sock.addColorStop(1, "rgba(40,10,0,0)");
+    g.fillStyle = sock; g.beginPath(); g.arc(ex, ey, er * 2, 0, TAU); g.fill();
+    g.fillStyle = "#d9b45a"; g.beginPath(); g.ellipse(ex, ey, er * 0.75, er, 0, 0, TAU); g.fill();
+    g.fillStyle = "#0e0e10"; g.beginPath(); g.ellipse(ex + side * er * 0.12, ey, er * 0.55, er * 0.75, 0, 0, TAU); g.fill();
+    g.fillStyle = "rgba(255,255,255,0.95)"; g.beginPath(); g.arc(ex - er * 0.2, ey - er * 0.35, er * 0.24, 0, TAU); g.fill();
+  }
+  // 嘴：正面看是一个小圆口
+  g.fillStyle = v.lips || mix(head, "#3a0a00", 0.35);
+  g.beginPath(); g.ellipse(0, 0.2 * s, 0.085 * s, 0.065 * s, 0, 0, TAU); g.fill();
+  g.fillStyle = "rgba(30,5,0,0.7)"; g.beginPath(); g.ellipse(0, 0.21 * s, 0.04 * s, 0.03 * s, 0, 0, TAU); g.fill();
+  return { c, o };
 }
 
 /* ---------- 鳍：半透明，根部浓、末端淡，带鳍条 ---------- */
@@ -618,35 +705,57 @@ function drawFin(g, len, wid, color, rays, wave, alpha) {
 
 function drawRanchu(f, g) {
   const k = 0.86 + 0.2 * (1 - f.z), s = f.s, v = f.v;
-  const fx = Math.abs(f.face) < 0.12 ? 0.12 * (f.face < 0 ? -1 : 1) : f.face;
+  // 转身：侧面最多压到 0.6 倍宽（兰寿是圆的），转到一半淡入正面像
+  const af = Math.abs(f.face), dir = f.face < 0 ? -1 : 1;
+  const fx = dir * lerp(0.6, 1, smooth(af));
+  const turn = 1 - smooth(clamp((af - 0.08) / 0.72, 0, 1));
   const roll = Math.sin(f.phase * 0.5) * 0.035;
-  g.save();
-  g.translate(f.x, f.y);
-  g.rotate((f.face < 0 ? -f.tilt : f.tilt) + roll);
-  g.scale(fx * k, k);
-  g.globalAlpha = 0.86 + 0.14 * (1 - f.z);
+  const baseA = 0.86 + 0.14 * (1 - f.z);
   const rays = v.rays || "rgba(255,255,255,0.4)";
   const wag = Math.sin(f.phase) * 0.28, wave = Math.sin(f.phase - 1.2) * s * 0.1;
+  const frontA = smooth(clamp((turn - 0.12) / 0.38, 0, 1));   // 正面像：先垫在后面，很快变实
+  const sideA = 1 - smooth(clamp((turn - 0.4) / 0.45, 0, 1)); // 侧面像：在前面慢慢淡出
+  // 正面像（转身中间）
+  if (frontA > 0.01 && f.front) {
+    g.save();
+    g.translate(f.x, f.y); g.rotate(roll); g.scale(k, k);
+    g.globalAlpha = baseA * frontA;
+    const flap = Math.sin(f.phase * 0.9) * 0.25;
+    for (const side of [-1, 1]) { // 两侧张开的胸鳍、腹鳍
+      g.save(); g.translate(side * 0.66 * s, 0.45 * s); g.scale(side, 1); g.rotate(0.55 + flap); drawFin(g, 0.42 * s, 0.24 * s, v.fin, rays, 0, 0.85); g.restore();
+      g.save(); g.translate(side * 0.2 * s, 0.86 * s); g.scale(side, 1); g.rotate(1.25 - flap * 0.5); drawFin(g, 0.34 * s, 0.2 * s, v.fin, rays, 0, 0.8); g.restore();
+    }
+    g.drawImage(f.front.c, -f.front.o, -f.front.o, f.front.c.width / DPR, f.front.c.height / DPR);
+    if (f.blink < 0) for (const side of [-1, 1]) { g.fillStyle = mix(v.headMode ? v.head : v.body, "#000000", 0.15); g.beginPath(); g.ellipse(side * 0.46 * s, -0.04 * s, 0.075 * s, 0.08 * s, 0, 0, TAU); g.fill(); }
+    g.restore();
+  }
+  if (sideA <= 0.01) return;
+  g.save();
+  g.translate(f.x, f.y);
+  g.rotate((dir < 0 ? -f.tilt : f.tilt) * (1 - turn) + roll);
+  g.scale(fx * k, k);
+  g.globalAlpha = baseA * sideA;
 
-  // 远侧：尾、胸鳍、腹鳍
+  // 远侧：尾、腹鳍
   g.save(); g.translate(-0.98 * s, -0.18 * s); g.rotate(Math.PI - 0.75 + wag * 0.8); drawFin(g, 0.8 * s, 0.42 * s, v.fin, rays, wave, 0.55); g.restore();
   g.save(); g.translate(-0.98 * s, -0.08 * s); g.rotate(Math.PI - 0.1 + wag * 0.8); drawFin(g, 0.72 * s, 0.38 * s, v.fin, rays, -wave, 0.55); g.restore();
   g.save(); g.translate(0.05 * s, 0.88 * s); g.rotate(1.75 + Math.sin(f.phase * 0.8) * 0.2); drawFin(g, 0.34 * s, 0.2 * s, v.fin, rays, 0, 0.5); g.restore();
 
+  g.globalAlpha = baseA * sideA;
   g.drawImage(f.sprite.c, -f.sprite.ox, -f.sprite.oy, f.sprite.c.width / DPR, f.sprite.c.height / DPR);
-
-  // 眨眼
   if (f.blink < 0) { g.fillStyle = mix(v.headMode ? v.head : v.body, "#000000", 0.15); g.beginPath(); g.ellipse(0.7 * s, 0, 0.08 * s, 0.075 * s, 0, 0, TAU); g.fill(); }
-  // 吃东西时嘴一张一合
   if (f.gulp > 0) { const o = Math.abs(Math.sin(f.gulp * 18)); g.fillStyle = "rgba(30,5,0,0.85)"; g.beginPath(); g.ellipse(1.02 * s, 0.27 * s, 0.04 * s, 0.02 * s + 0.05 * s * o, 0.3, 0, TAU); g.fill(); }
 
-  // 近侧：胸鳍、腹鳍、臀鳍、尾
+  // 近侧：胸鳍、腹鳍、臀鳍、尾（尾巴在转身时藏到身后）
+  g.globalAlpha = baseA * sideA;
   g.save(); g.translate(0.4 * s, 0.55 * s); g.rotate(2.0 + Math.sin(f.phase * 0.9) * 0.3); drawFin(g, 0.42 * s, 0.24 * s, v.fin, rays, 0, 0.85); g.restore();
   g.save(); g.translate(-0.05 * s, 0.92 * s); g.rotate(1.7 + Math.sin(f.phase * 0.8 + 1) * 0.2); drawFin(g, 0.38 * s, 0.22 * s, v.fin, rays, 0, 0.85); g.restore();
   g.save(); g.translate(-0.68 * s, 0.68 * s); g.rotate(2.15 + Math.sin(f.phase + 2) * 0.15); drawFin(g, 0.26 * s, 0.16 * s, v.fin, rays, 0, 0.8); g.restore();
+  g.globalAlpha = baseA * sideA;
   g.save(); g.translate(-0.98 * s, -0.14 * s); g.rotate(Math.PI - 0.55 + wag); drawFin(g, 0.9 * s, 0.46 * s, v.fin, rays, wave, 0.9); g.restore();
   g.save(); g.translate(-0.98 * s, -0.04 * s); g.rotate(Math.PI + 0.05 + wag); drawFin(g, 0.82 * s, 0.42 * s, v.fin, rays, -wave, 0.9); g.restore();
   g.restore();
+
 }
 
 // 鼠标停在鱼身上时，显示品种名
@@ -733,7 +842,9 @@ function updateFish(f, dt) {
   f.y = clamp(f.y, nb.top, nb.bot); f.x = clamp(f.x, nb.l, nb.r);
   // 转身：朝向在 -1..1 之间过渡，看起来像在水里转了个身
   const wantFace = Math.abs(f.vx) > 4 * S ? Math.sign(f.vx) : f.face >= 0 ? 1 : -1;
-  f.face = clamp(f.face + clamp(wantFace - f.face, -dt * 2.6, dt * 2.6), -1, 1);
+  // 转身放慢，转到正面时稍作停顿
+  const turnRate = Math.abs(f.face) < 0.25 ? 1.1 : 2.0;
+  f.face = clamp(f.face + clamp(wantFace - f.face, -dt * turnRate, dt * turnRate), -1, 1);
   let tilt = Math.atan2(f.vy, Math.abs(f.vx) + 15 * S) * 0.8;
   if (mode === "food" && best && best.state === "float" && Math.abs(f.x + f.face * f.s - best.x) < f.s * 2) tilt = -0.55;
   f.tilt = lerp(f.tilt, clamp(tilt, -0.6, 0.45), 1 - Math.exp(-dt * 3));
