@@ -23,7 +23,7 @@ rm -f build/$BIN-*
 
 echo "▸ 拷贝资源…"
 cp mac/Info.plist "$APP/Contents/Info.plist"
-cp web/index.html "$APP/Contents/Resources/web/index.html"
+cp web/*.html "$APP/Contents/Resources/web/"
 if [ -d mac/AppIcon.iconset ]; then
   iconutil -c icns mac/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
 fi

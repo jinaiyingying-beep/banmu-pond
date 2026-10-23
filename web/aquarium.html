@@ -1,0 +1,949 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>兰寿缸</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #2d5a5a; color-scheme: only light; }
+  body { font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif; user-select: none; -webkit-user-select: none; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  .tag {
+    position: fixed; top: 1.2vh; left: 50%; transform: translateX(-50%);
+    padding: 4px 18px; border-radius: 999px; font: 500 13px/1.2 "Kaiti SC", "STKaiti", "Noto Serif CJK SC", serif;
+    letter-spacing: .32em; color: #e8efe9; background: rgba(0, 0, 0, .35);
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); transition: opacity .6s;
+  }
+  .hint {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    padding: 7px 16px; border-radius: 999px; font-size: 12.5px; letter-spacing: .06em; white-space: nowrap;
+    color: #fff; background: rgba(20, 40, 38, .45); transition: opacity 1.2s;
+  }
+  .hidden { opacity: 0 !important; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="tag" id="tag">兰寿缸</div>
+<div class="hint" id="hint">点一下撒鱼食 · 鼠标靠近，金鱼会游过来</div>
+<script>
+"use strict";
+/* ============================================================
+   兰寿缸 · 正视的水草鱼缸，铺满桌面
+   接口与「半亩塘」一致：window.pond.pointer / setConfig / pause / feed
+   ============================================================ */
+const HOST = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pond);
+const post = (m) => { try { if (HOST) window.webkit.messageHandlers.pond.postMessage(m); } catch (e) {} };
+
+const TAU = Math.PI * 2;
+const rand = (a = 1, b) => (b === undefined ? Math.random() * a : a + Math.random() * (b - a));
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const pick = (a) => a[(Math.random() * a.length) | 0];
+function hexRgb(h) {
+  if (h[0] !== "#") { const m = h.match(/\d+(\.\d+)?/g).map(Number); return [m[0], m[1], m[2]]; } // 也接受 rgb(...) 写法
+  const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function mix(a, b, t) { const A = hexRgb(a), B = hexRgb(b); return `rgb(${A.map((v, i) => Math.round(lerp(v, B[i], t))).join(",")})`; }
+function hexOf(rgb) { const m = rgb.match(/\d+/g).map(Number); return "#" + m.slice(0, 3).map((v) => v.toString(16).padStart(2, "0")).join(""); }
+function rgba(h, a) { const [r, g, b] = hexRgb(h); return `rgba(${r},${g},${b},${a})`; }
+function makeCanvas(w, h) { const c = document.createElement("canvas"); c.width = Math.max(1, w | 0); c.height = Math.max(1, h | 0); return c; }
+function seeded(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+
+let config = { name: "兰寿缸", fishCount: 9, showTitle: true, fps: 60, timeMode: "auto", quality: "auto" };
+if (!HOST) try { Object.assign(config, JSON.parse(localStorage.getItem("ranchu-tank") || "{}")); } catch (e) {}
+
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+let W, H, DPR, S, T = 0;
+let tank = {}, backdrop, gravelLayer, hardscape;
+
+/* ============================================================
+   缸体几何
+   ============================================================ */
+function computeTank() {
+  tank.lid = H * 0.075;            // 灯罩高度
+  tank.level = H * 0.13;           // 水面
+  tank.gravel = H * 0.84;          // 底砂顶面
+}
+// 底砂顶面：左右起伏，中后部略高
+function gravelTop(x) {
+  const u = x / W;
+  return tank.gravel + Math.sin(u * 5.3 + 0.7) * 10 * S + Math.sin(u * 13.1) * 4 * S - Math.exp(-((u - 0.3) ** 2) / 0.02) * 26 * S;
+}
+function inWater(x, y) { return y > surfaceY(x) && y < gravelTop(x); }
+
+/* ============================================================
+   静态层：背景水色、底砂、石头沉木（尺寸变化时重画）
+   ============================================================ */
+function paintBackdrop() {
+  backdrop = makeCanvas(W * DPR, H * DPR);
+  const g = backdrop.getContext("2d"); g.scale(DPR, DPR);
+  const R = seeded(77), r = (a = 1, b) => (b === undefined ? R() * a : a + R() * (b - a));
+  // 后壁：上亮下暗的青绿
+  const bg = g.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, "#9fd0c4"); bg.addColorStop(0.45, "#5f9e93"); bg.addColorStop(1, "#2c5b55");
+  g.fillStyle = bg; g.fillRect(0, 0, W, H);
+  // 中间透亮（灯在正上方）
+  const glow = g.createRadialGradient(W * 0.5, H * 0.15, 0, W * 0.5, H * 0.15, Math.max(W, H) * 0.7);
+  glow.addColorStop(0, "rgba(235,255,240,0.35)"); glow.addColorStop(1, "rgba(235,255,240,0)");
+  g.fillStyle = glow; g.fillRect(0, 0, W, H);
+  // 远处朦胧的水草影子
+  for (let k = 0; k < 70; k++) {
+    const x = r(W), h = r(H * 0.15, H * 0.45), base = tank.gravel + 10 * S;
+    g.strokeStyle = `rgba(40,90,70,${r(0.08, 0.16)})`; g.lineWidth = r(6, 16) * S; g.lineCap = "round";
+    g.beginPath(); g.moveTo(x, base); g.quadraticCurveTo(x + r(-30, 30) * S, base - h * 0.5, x + r(-50, 50) * S, base - h); g.stroke();
+  }
+  // 两侧略暗，有景深
+  const side = g.createLinearGradient(0, 0, W, 0);
+  side.addColorStop(0, "rgba(15,40,38,0.35)"); side.addColorStop(0.18, "rgba(15,40,38,0)");
+  side.addColorStop(0.82, "rgba(15,40,38,0)"); side.addColorStop(1, "rgba(15,40,38,0.35)");
+  g.fillStyle = side; g.fillRect(0, 0, W, H);
+}
+
+function paintGravel() {
+  gravelLayer = makeCanvas(W * DPR, H * DPR);
+  const g = gravelLayer.getContext("2d"); g.scale(DPR, DPR);
+  const R = seeded(2024), r = (a = 1, b) => (b === undefined ? R() * a : a + R() * (b - a));
+  g.beginPath(); g.moveTo(0, H);
+  for (let x = 0; x <= W; x += 6) g.lineTo(x, gravelTop(x));
+  g.lineTo(W, H); g.closePath();
+  const base = g.createLinearGradient(0, tank.gravel - 30 * S, 0, H);
+  base.addColorStop(0, "#9c8562"); base.addColorStop(0.3, "#b79c74"); base.addColorStop(1, "#7a6648");
+  g.fillStyle = base; g.fill();
+  g.save(); g.clip();
+  const COLS = ["#c9b48e", "#a8916c", "#d8cdb6", "#8f7b5c", "#bfae94", "#9a9488", "#e6dccb", "#6f6352"];
+  const n = Math.round(W * (H - tank.gravel + 40 * S) / (14 * S * S));
+  for (let k = 0; k < n; k++) {
+    const x = r(W), top = gravelTop(x), y = top + Math.pow(r(), 1.3) * (H - top + 4);
+    const depth = (y - top) / (H - top + 1);
+    const rr = r(1.4, 3.4) * S * (0.75 + depth * 0.6);
+    const c = pick2(COLS, R);
+    const pg = g.createRadialGradient(x - rr * 0.35, y - rr * 0.4, rr * 0.1, x, y, rr);
+    pg.addColorStop(0, mix(c, "#ffffff", 0.2)); pg.addColorStop(0.7, c); pg.addColorStop(1, mix(c, "#20180c", 0.22));
+    g.fillStyle = pg; g.beginPath(); g.ellipse(x, y, rr * r(1, 1.4), rr, r(TAU), 0, TAU); g.fill();
+  }
+  // 顶面受光、底部（贴着前玻璃的截面）更暗
+  const shade = g.createLinearGradient(0, tank.gravel - 30 * S, 0, H);
+  shade.addColorStop(0, "rgba(255,250,225,0.22)"); shade.addColorStop(0.2, "rgba(120,110,80,0.1)"); shade.addColorStop(1, "rgba(30,25,12,0.5)");
+  g.fillStyle = shade; g.fillRect(0, 0, W, H);
+  g.restore();
+}
+function pick2(arr, R) { return arr[(R() * arr.length) | 0]; }
+
+function paintHardscape() {
+  hardscape = makeCanvas(W * DPR, H * DPR);
+  const g = hardscape.getContext("2d"); g.scale(DPR, DPR);
+  const R = seeded(31), r = (a = 1, b) => (b === undefined ? R() * a : a + R() * (b - a));
+  // 沉木：从左侧斜伸出来的枝杈
+  const wood = (x0, y0, x1, y1, w0, w1, bend) => {
+    const mx = (x0 + x1) / 2 + bend, my = (y0 + y1) / 2 - Math.abs(bend) * 0.4;
+    const n = 16;
+    for (let i = 0; i < n; i++) {
+      const t0 = i / n, t1 = (i + 1) / n;
+      const P = (t) => [(1 - t) ** 2 * x0 + 2 * (1 - t) * t * mx + t * t * x1, (1 - t) ** 2 * y0 + 2 * (1 - t) * t * my + t * t * y1];
+      const [ax, ay] = P(t0), [bx, by] = P(t1);
+      g.strokeStyle = "#5a3a22"; g.lineCap = "round"; g.lineWidth = lerp(w0, w1, t0);
+      g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke();
+      g.strokeStyle = "rgba(190,140,90,0.35)"; g.lineWidth = lerp(w0, w1, t0) * 0.25;
+      g.beginPath(); g.moveTo(ax - lerp(w0, w1, t0) * 0.2, ay - lerp(w0, w1, t0) * 0.2); g.lineTo(bx - lerp(w0, w1, t1) * 0.2, by - lerp(w0, w1, t1) * 0.2); g.stroke();
+    }
+    return [mx, my];
+  };
+  const wx = W * 0.2, wy = gravelTop(W * 0.2) + 8 * S;
+  wood(wx - 170 * S, wy, wx + 60 * S, wy - 200 * S, 44 * S, 20 * S, -30 * S);
+  wood(wx + 50 * S, wy - 190 * S, wx + 190 * S, wy - 300 * S, 20 * S, 6 * S, 30 * S);
+  wood(wx - 40 * S, wy - 110 * S, wx - 150 * S, wy - 260 * S, 16 * S, 5 * S, 35 * S);
+  wood(wx + 10 * S, wy - 150 * S, wx + 150 * S, wy - 170 * S, 12 * S, 4 * S, -12 * S);
+  // 沉木上的莫丝
+  for (let k = 0; k < 260; k++) {
+    const t = r(), x = lerp(wx - 170 * S, wx + 60 * S, t) + r(-25, 25) * S, y = lerp(wy, wy - 200 * S, t) + r(-26, 4) * S;
+    g.fillStyle = `rgba(${r(50, 80) | 0},${r(110, 150) | 0},${r(40, 60) | 0},${r(0.5, 0.9)})`;
+    g.beginPath(); g.arc(x, y, r(2, 5) * S, 0, TAU); g.fill();
+  }
+  // 青龙石
+  const stone = (cx, w, h, seed) => {
+    const RR = seeded(seed), rr = (a, b) => a + RR() * (b - a);
+    const base = gravelTop(cx) + 8 * S, pts = [];
+    const n = 9;
+    for (let i = 0; i <= n; i++) {
+      const t = i / n, x = cx - w / 2 + w * t;
+      const peak = Math.sin(Math.PI * Math.pow(t, rr(0.7, 1.3)));
+      pts.push([x + rr(-8, 8) * S, base - h * peak * rr(0.75, 1.05)]);
+    }
+    g.beginPath(); g.moveTo(cx - w / 2, base);
+    for (const [x, y] of pts) g.lineTo(x, y);
+    g.lineTo(cx + w / 2, base); g.closePath();
+    const sg = g.createLinearGradient(cx - w / 2, base - h, cx + w / 3, base);
+    sg.addColorStop(0, "#b9c0c0"); sg.addColorStop(0.5, "#7d8786"); sg.addColorStop(1, "#4b5352");
+    g.fillStyle = sg; g.fill();
+    g.save(); g.clip();
+    // 石纹
+    for (let k = 0; k < 14; k++) {
+      g.strokeStyle = `rgba(${RR() < 0.5 ? "230,235,230" : "40,48,48"},${rr(0.15, 0.35)})`; g.lineWidth = rr(1, 3) * S;
+      const y = base - rr(0, h);
+      g.beginPath(); g.moveTo(cx - w / 2, y); g.bezierCurveTo(cx - w / 6, y - rr(-30, 30) * S, cx + w / 6, y + rr(-30, 30) * S, cx + w / 2, y - rr(-20, 20) * S); g.stroke();
+    }
+    g.restore();
+    return { cx, top: base - h, base, w, h };
+  };
+  stones = [stone(W * 0.62, 230 * S, 170 * S, 9), stone(W * 0.72, 140 * S, 105 * S, 15), stone(W * 0.43, 110 * S, 70 * S, 21)];
+  // 石头上的榕（Anubias）：宽叶，深绿
+  const s0 = stones[0];
+  for (let k = 0; k < 7; k++) {
+    const bx = s0.cx + r(-40, 40) * S, by = s0.top + s0.h * 0.35 + r(-10, 10) * S;
+    const ang = -Math.PI / 2 + r(-1.1, 1.1), len = r(40, 70) * S;
+    const tx = bx + Math.cos(ang) * len, ty = by + Math.sin(ang) * len;
+    g.strokeStyle = "#3f5f2a"; g.lineWidth = 2.5 * S; g.beginPath(); g.moveTo(bx, by); g.lineTo(lerp(bx, tx, 0.45), lerp(by, ty, 0.45)); g.stroke();
+    g.save(); g.translate(lerp(bx, tx, 0.72), lerp(by, ty, 0.72)); g.rotate(ang);
+    const lg = g.createLinearGradient(-len * 0.3, 0, len * 0.3, 0);
+    lg.addColorStop(0, "#2f5a26"); lg.addColorStop(1, "#4f8a3a");
+    g.fillStyle = lg; g.beginPath(); g.ellipse(0, 0, len * 0.34, len * 0.17, 0, 0, TAU); g.fill();
+    g.strokeStyle = "rgba(170,210,130,0.5)"; g.lineWidth = 1 * S; g.beginPath(); g.moveTo(-len * 0.3, 0); g.lineTo(len * 0.32, 0); g.stroke();
+    g.restore();
+  }
+}
+let stones = [];
+
+/* ============================================================
+   会摆动的水草
+   ============================================================ */
+let plants = [];
+function layoutPlants() {
+  const R = seeded(555), r = (a = 1, b) => (b === undefined ? R() * a : a + R() * (b - a));
+  plants = [];
+  // 苦草：长长的带子，一丛一丛
+  for (const [cx, n] of [[0.07, 14], [0.9, 16], [0.52, 8]]) {
+    for (let k = 0; k < n; k++) {
+      const x = W * cx + r(-60, 60) * S, base = gravelTop(x) + 6 * S;
+      plants.push({ type: "val", x, base, h: (base - tank.level) * r(0.55, 0.95), w: r(5, 9) * S, ph: r(TAU), c: pick2(["#4f8f3c", "#5d9e44", "#3f7d33", "#6aa84c"], R), back: true });
+    }
+  }
+  // 有茎草：红绿两种
+  for (const [cx, n, red] of [[0.33, 7, false], [0.8, 6, true], [0.12, 5, true]]) {
+    for (let k = 0; k < n; k++) {
+      const x = W * cx + r(-45, 45) * S, base = gravelTop(x) + 6 * S;
+      plants.push({ type: "stem", x, base, h: r(120, 260) * S, ph: r(TAU), red, back: true, leaves: (r(14, 22)) | 0 });
+    }
+  }
+  // 前景矮草：沿缸底一圈
+  for (let k = 0; k < Math.round(W / (7 * S)); k++) {
+    const x = r(W), base = H + 4 * S;
+    if (r() < 0.35) continue;
+    plants.push({ type: "grass", x, base, h: r(18, 55) * S, ph: r(TAU), c: pick2(["#5aa046", "#6fb655", "#4c8c3c"], R), back: false });
+  }
+}
+function drawPlants(g, back) {
+  for (const p of plants) {
+    if (p.back !== back) continue;
+    const sway = (t) => Math.sin(T * 0.7 + p.ph + t * 2.2) * t * t;
+    if (p.type === "val") {
+      g.strokeStyle = p.c; g.lineCap = "round"; g.lineWidth = p.w;
+      g.beginPath(); g.moveTo(p.x, p.base);
+      const n = 8;
+      for (let i = 1; i <= n; i++) { const t = i / n; g.lineTo(p.x + sway(t) * 38 * S + t * 10 * S, p.base - p.h * t); }
+      g.stroke();
+      g.strokeStyle = "rgba(220,255,200,0.18)"; g.lineWidth = p.w * 0.3;
+      g.beginPath(); g.moveTo(p.x, p.base);
+      for (let i = 1; i <= n; i++) { const t = i / n; g.lineTo(p.x + sway(t) * 38 * S + t * 10 * S - p.w * 0.2, p.base - p.h * t); }
+      g.stroke();
+    } else if (p.type === "stem") {
+      const pts = [];
+      for (let i = 0; i <= p.leaves; i++) { const t = i / p.leaves; pts.push([p.x + sway(t) * 16 * S, p.base - p.h * t]); }
+      g.strokeStyle = p.red ? "#7a4a32" : "#4c7a35"; g.lineWidth = 2.2 * S;
+      g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke();
+      for (let i = 1; i < pts.length; i++) {
+        const t = i / p.leaves, [x, y] = pts[i];
+        const col = p.red ? mix("#5f8f3a", "#d0553a", Math.min(1, t * 1.3)) : mix("#3f7a30", "#8ccf5a", t);
+        const L = (9 + 6 * (1 - Math.abs(t - 0.5) * 2)) * S;
+        for (const side of [-1, 1]) {
+          g.save(); g.translate(x, y); g.rotate(side * (0.9 + Math.sin(T + p.ph + i) * 0.08) - Math.PI / 2 + (i % 2 ? 0.25 : -0.25));
+          g.fillStyle = col; g.beginPath(); g.ellipse(L * 0.5, 0, L * 0.55, L * 0.2, 0, 0, TAU); g.fill();
+          g.restore();
+        }
+      }
+    } else {
+      g.strokeStyle = p.c; g.lineWidth = 2 * S; g.lineCap = "round";
+      g.beginPath(); g.moveTo(p.x, p.base); g.quadraticCurveTo(p.x + sway(0.5) * 6 * S, p.base - p.h * 0.5, p.x + sway(1) * 10 * S + 3 * S, p.base - p.h); g.stroke();
+    }
+  }
+}
+
+/* ============================================================
+   水面（从水下看上去）：一维弹簧波
+   ============================================================ */
+const NCOL = 160;
+const waveH = new Float32Array(NCOL), waveV = new Float32Array(NCOL);
+let surfL = 0, surfR = 1;
+function colAt(x) { return clamp(Math.round((x / W) * (NCOL - 1)), 0, NCOL - 1); }
+function splash(x, force, width = 2) {
+  const c = colAt(x);
+  for (let k = -width; k <= width; k++) { const i = c + k; if (i >= 0 && i < NCOL) waveV[i] += force * (1 - Math.abs(k) / (width + 1)); }
+}
+function updateWaves(dt) {
+  for (let s = 0; s < 2; s++) {
+    for (let i = 0; i < NCOL; i++) { waveV[i] += (-waveH[i] * 60 - waveV[i] * 1.6) * dt / 2; waveH[i] += waveV[i] * dt / 2; }
+    for (let k = 0; k < 3; k++) for (let i = 0; i < NCOL; i++) {
+      const l = i > 0 ? waveH[i - 1] : waveH[i], r = i < NCOL - 1 ? waveH[i + 1] : waveH[i];
+      waveV[i] += (l + r - 2 * waveH[i]) * 18 * dt / 2;
+    }
+  }
+}
+function surfaceY(x) {
+  const f = (clamp(x, 0, W) / W) * (NCOL - 1), i = clamp(Math.floor(f), 0, NCOL - 2), k = f - i;
+  return tank.level + lerp(waveH[i], waveH[i + 1], k) + Math.sin(x * 0.014 + T * 1.2) * 2.2 * S + Math.sin(x * 0.037 - T * 1.7) * 1.2 * S;
+}
+
+function drawSurfaceAndLid(g) {
+  // 水面以上：灯罩内侧
+  g.beginPath(); g.moveTo(0, 0); g.lineTo(W, 0);
+  for (let x = W; x >= 0; x -= 6 * S) g.lineTo(x, surfaceY(x));
+  g.closePath();
+  const air = g.createLinearGradient(0, 0, 0, tank.level);
+  air.addColorStop(0, "#1d2524"); air.addColorStop(1, "#3c4b48");
+  g.fillStyle = air; g.fill();
+  // 灯条
+  const ly = tank.lid * 0.55;
+  const led = g.createLinearGradient(0, ly - 14 * S, 0, ly + 30 * S);
+  const ledCol = dayLight > 0.5 ? "255,252,235" : "150,185,255";
+  led.addColorStop(0, `rgba(${ledCol},0)`); led.addColorStop(0.3, `rgba(${ledCol},0.95)`); led.addColorStop(1, `rgba(${ledCol},0)`);
+  g.fillStyle = led; g.fillRect(W * 0.04, ly - 14 * S, W * 0.92, 44 * S);
+  g.fillStyle = `rgba(${ledCol},1)`; g.fillRect(W * 0.05, ly - 1.5 * S, W * 0.9, 3 * S);
+  // 灯罩前沿
+  g.fillStyle = "#151b1a"; g.fillRect(0, 0, W, tank.lid * 0.28);
+  // 从水下看水面：一层银亮的镜面
+  g.beginPath();
+  for (let x = 0; x <= W; x += 5 * S) { const y = surfaceY(x); x ? g.lineTo(x, y) : g.moveTo(x, y); }
+  for (let x = W; x >= 0; x -= 5 * S) g.lineTo(x, surfaceY(x) + 16 * S + Math.sin(x * 0.02 + T) * 3 * S);
+  g.closePath();
+  const mir = g.createLinearGradient(0, tank.level - 4 * S, 0, tank.level + 20 * S);
+  mir.addColorStop(0, "rgba(240,255,250,0.85)"); mir.addColorStop(0.35, "rgba(190,230,220,0.45)"); mir.addColorStop(1, "rgba(190,230,220,0)");
+  g.fillStyle = mir; g.fill();
+  g.strokeStyle = "rgba(255,255,255,0.95)"; g.lineWidth = 1.6 * S;
+  g.beginPath(); for (let x = 0; x <= W; x += 4 * S) { const y = surfaceY(x); x ? g.lineTo(x, y) : g.moveTo(x, y); } g.stroke();
+}
+
+/* ============================================================
+   光束、底砂光纹、悬浮颗粒
+   ============================================================ */
+function drawRays(g) {
+  g.save(); g.globalCompositeOperation = "lighter";
+  for (let k = 0; k < 7; k++) {
+    const x = W * (0.08 + k * 0.14) + Math.sin(T * 0.25 + k * 1.3) * 40 * S;
+    const w = (60 + (k % 3) * 30) * S, a = (0.05 + 0.03 * Math.sin(T * 0.6 + k)) * dayLight;
+    const lg = g.createLinearGradient(0, tank.level, 0, tank.gravel);
+    lg.addColorStop(0, `rgba(255,255,230,${a})`); lg.addColorStop(1, "rgba(255,255,230,0)");
+    g.fillStyle = lg; g.beginPath();
+    g.moveTo(x, tank.level); g.lineTo(x + w, tank.level); g.lineTo(x + w * 2.2 + 80 * S, tank.gravel); g.lineTo(x + w * 0.8 + 80 * S, tank.gravel); g.closePath(); g.fill();
+  }
+  g.restore();
+}
+function drawGravelCaustics(g) {
+  g.save();
+  g.beginPath(); g.moveTo(0, H); for (let x = 0; x <= W; x += 8) g.lineTo(x, gravelTop(x) - 2 * S); g.lineTo(W, H); g.closePath(); g.clip();
+  g.globalCompositeOperation = "lighter";
+  for (let k = 0; k < 3; k++) {
+    g.strokeStyle = `rgba(255,255,220,${(0.05 + k * 0.012) * dayLight})`; g.lineWidth = (5 - k * 1.2) * S;
+    for (let band = 0; band < 6; band++) {
+      g.beginPath();
+      for (let x = 0; x <= W; x += 10 * S) {
+        const y = gravelTop(x) + (6 + band * 14 + k * 5) * S + Math.sin(x * 0.022 + T * (0.9 + k * 0.3) + band * 1.9) * 7 * S * Math.sin(x * 0.005 + band) + Math.sin(x * 0.012 - T * 0.6 + band * 2.1) * 5 * S;
+        x ? g.lineTo(x, y) : g.moveTo(x, y);
+      }
+      g.stroke();
+    }
+  }
+  g.restore();
+}
+const motes = [];
+function drawMotes(g, dt) {
+  const want = Math.round(W * H / 22000);
+  while (motes.length < want) motes.push({ x: rand(W), y: rand(tank.level, tank.gravel), z: rand(), vx: rand(-4, 4), vy: rand(-3, 3), ph: rand(TAU) });
+  for (const m of motes) {
+    m.x += (m.vx + Math.sin(T * 0.3 + m.ph) * 4) * S * dt; m.y += (m.vy + Math.cos(T * 0.25 + m.ph) * 3) * S * dt;
+    if (m.x < 0) m.x += W; if (m.x > W) m.x -= W;
+    if (m.y < tank.level + 10 * S || m.y > tank.gravel) m.vy *= -1;
+    g.fillStyle = `rgba(255,255,240,${0.12 + 0.25 * (1 - m.z)})`;
+    g.beginPath(); g.arc(m.x, m.y, (0.6 + (1 - m.z) * 1.4) * S, 0, TAU); g.fill();
+  }
+}
+
+/* ============================================================
+   兰寿金鱼
+   ============================================================ */
+/* ---------- 兰寿品种（参照常见兰寿花色） ----------
+   body 身体底色 · belly 腹部 · head 头瘤/头部颜色 · headMode: full 整个头 / gill 到鳃盖 / cap 只有头顶
+   fin 鳍色 · rays 鳍条色 · metal 鳞片反光 0~1 · scale 鳞片大小倍数
+   parts: 花纹 —— blotch 大块斑、spots 小点、back 背部覆盖、belly 腹部覆盖、stripe 背脊一道、tiger 虎斑 */
+const VARIETIES = [
+  { name: "红寿", w: 6, body: "#e8521c", belly: "#f6a24a", head: "#e2421a", fin: "#f07a3a", metal: 0.5 },
+  { name: "黑寿", w: 3, body: "#202126", belly: "#4a4136", head: "#26262b", fin: "#2c2c33", metal: 0.35 },
+  { name: "玉兔", w: 4, body: "#dcdedc", belly: "#f4f3ef", head: "#f2b443", headMode: "full", fin: "#ebe7df", metal: 0.6 },
+  { name: "红白", w: 5, body: "#f4f1ec", belly: "#fbf9f5", head: "#ef5a26", headMode: "full", fin: "#f0843e", parts: [{ t: "back", c: "#f1a43a", y: -0.35 }] },
+  { name: "樱花", w: 3, body: "#f6ecea", belly: "#fbf6f4", head: "#f2c0b4", headMode: "full", fin: "#e9e1e1", rays: "rgba(40,30,30,0.45)", parts: [{ t: "spots", c: "#d9452e", n: 34, r: [0.025, 0.05] }, { t: "blotch", c: "#2a2426", n: 1, r: [0.07, 0.1] }] },
+  { name: "包金", w: 3, body: "#1d2f4c", belly: "#f2a23a", head: "#ee6823", headMode: "full", fin: "#22324f", metal: 0.5, parts: [{ t: "belly", c: "#f0a038", y: 0.12 }] },
+  { name: "齐鳃红", w: 3, body: "#e3e7e7", belly: "#cfe6e6", head: "#e8331e", headMode: "gill", fin: "#d9e6e6", metal: 0.7 },
+  { name: "丹顶红", w: 3, body: "#f7f6f3", belly: "#fbfbf8", head: "#f5f3ef", cap: "#e8332a", headMode: "cap", fin: "#f0896a" },
+  { name: "雪豹", w: 2, body: "#f4f4f1", belly: "#fafaf8", head: "#f3f2ed", fin: "#dfe0e3", rays: "rgba(30,30,35,0.5)", parts: [{ t: "spots", c: "#1f1f24", n: 20, r: [0.03, 0.07] }] },
+  { name: "麒麟", w: 2, body: "#e8e2d8", belly: "#f3efe8", head: "#d9a070", headMode: "full", fin: "#3a3a40", parts: [{ t: "blotch", c: "#232328", n: 6, r: [0.18, 0.3] }, { t: "blotch", c: "#e3892e", n: 3, r: [0.1, 0.18] }] },
+  { name: "重墨", w: 2, body: "#222227", belly: "#3a3836", head: "#6a6262", headMode: "full", fin: "#26262b", parts: [{ t: "blotch", c: "#ece6dc", n: 3, r: [0.12, 0.2] }, { t: "blotch", c: "#e0a040", n: 1, r: [0.08, 0.12] }] },
+  { name: "五花", w: 3, body: "#f0ece6", belly: "#f7f4f0", head: "#e85a2a", headMode: "full", fin: "#2a2a30", parts: [{ t: "blotch", c: "#e3542a", n: 3, r: [0.12, 0.22] }, { t: "spots", c: "#1d1d22", n: 24, r: [0.025, 0.06] }] },
+  { name: "水墨", w: 2, body: "#f2f1ee", belly: "#f8f7f4", head: "#f0b64a", headMode: "full", fin: "#e8e6e2", rays: "rgba(30,30,35,0.4)", parts: [{ t: "blotch", c: "#2b2b30", n: 4, r: [0.1, 0.2] }] },
+  { name: "三色奶牛", w: 2, body: "#f6f2f2", belly: "#fbf9f9", head: "#f08a78", headMode: "full", fin: "#2c2c50", parts: [{ t: "blotch", c: "#2a2840", n: 6, r: [0.08, 0.16] }, { t: "blotch", c: "#e0603a", n: 1, r: [0.07, 0.1] }] },
+  { name: "奶牛", w: 2, body: "#f1edeb", belly: "#f8f6f5", head: "#efe4df", headMode: "full", fin: "#1f1f24", parts: [{ t: "blotch", c: "#1e1e22", n: 4, r: [0.1, 0.2] }] },
+  { name: "虎纹", w: 2, body: "#2b3f9a", belly: "#4a5cb0", head: "#3550b0", fin: "#2a3a8a", metal: 0.4, parts: [{ t: "tiger", c: "#f0a030", n: 9 }] },
+  { name: "雪青", w: 2, body: "#97a2ae", belly: "#c9ced4", head: "#78808f", headMode: "full", fin: "#b2bac6", metal: 0.85, scale: 1.2 },
+  { name: "紫寿", w: 2, body: "#b5733d", belly: "#e0a868", head: "#8a6e66", headMode: "full", fin: "#e6c6a8", metal: 0.9, scale: 1.2 },
+  { name: "红牛", w: 2, body: "#e33a22", belly: "#ef6a3a", head: "#e0361e", fin: "#2a2022", parts: [{ t: "blotch", c: "#1f1b1d", n: 6, r: [0.1, 0.2] }] },
+  { name: "红虎", w: 2, body: "#e2401e", belly: "#ee6a34", head: "#de3a1a", fin: "#2c2224", parts: [{ t: "tiger", c: "#241d1f", n: 7 }] },
+  { name: "唐三彩", w: 2, body: "#f2eee8", belly: "#f8f6f2", head: "#ee7a3a", headMode: "full", fin: "#232327", parts: [{ t: "blotch", c: "#ec6a2a", n: 4, r: [0.12, 0.22] }, { t: "spots", c: "#1e1e22", n: 10, r: [0.03, 0.06] }] },
+  { name: "十一红", w: 2, body: "#f7f5f2", belly: "#fbfaf8", head: "#f6f2ee", headMode: "full", fin: "#e8301e", lips: "#e02a1a", parts: [{ t: "blotch", c: "#e8301e", n: 1, r: [0.05, 0.07], at: [0.62, 0.32] }] },
+  { name: "玉面通背", w: 2, body: "#f6f3ef", belly: "#fbf9f6", head: "#f7f2ec", headMode: "full", fin: "#f06a40", parts: [{ t: "stripe", c: "#ef4a22" }] },
+  { name: "玉面红袍", w: 2, body: "#ef2e1e", belly: "#f25a3a", head: "#f6eee4", headMode: "full", fin: "#ef3a22" },
+  { name: "龙鳞", w: 2, body: "#f4a01c", belly: "#f9cc52", head: "#f2951a", fin: "#f7b030", metal: 1, scale: 1.6 },
+  { name: "熊猫", w: 2, body: "#f2f0ec", belly: "#f7f6f3", head: "#f2c23a", headMode: "full", fin: "#2a2a2e", eyePatch: true, parts: [{ t: "back", c: "#1c1c20", y: -0.15 }] },
+  { name: "紫金寿", w: 2, body: "#c23c38", belly: "#d8685a", head: "#c4383a", fin: "#d06060", metal: 0.75, scale: 1.25 },
+];
+function weighted(list) { let s = 0; for (const v of list) s += v.w; let r = Math.random() * s; for (const v of list) if ((r -= v.w) <= 0) return v; return list[0]; }
+
+class Ranchu {
+  constructor() {
+    this.v = weighted(VARIETIES);
+    this.s = rand(44, 62) * S;
+    this.z = rand(0, 1);
+    this.x = rand(W * 0.12, W * 0.88);
+    this.y = rand(tank.level + 80 * S, tank.gravel - 80 * S);
+    this.vx = rand(-1, 1) * 20 * S; this.vy = 0;
+    this.face = this.vx >= 0 ? 1 : -1; this.tilt = 0; this.phase = rand(TAU);
+    this.tx = this.x; this.ty = this.y; this.retarget = 0;
+    this.blink = rand(2, 6); this.gulp = 0; this.full = 0;
+    this.wen = rand(0.85, 1.08);         // 头瘤大小
+    this.seed = (Math.random() * 1e9) | 0;
+    buildSprite(this);
+  }
+}
+
+/* ---------- 形状工具 ---------- */
+function bodyPath(s) {
+  const p = new Path2D();
+  p.moveTo(1.0 * s, 0.1 * s);
+  p.bezierCurveTo(1.0 * s, -0.3 * s, 0.85 * s, -0.62 * s, 0.5 * s, -0.74 * s);
+  p.bezierCurveTo(0.22 * s, -0.98 * s, -0.36 * s, -1.02 * s, -0.7 * s, -0.74 * s);
+  p.bezierCurveTo(-0.88 * s, -0.57 * s, -0.97 * s, -0.38 * s, -1.0 * s, -0.22 * s);
+  p.lineTo(-1.03 * s, 0.05 * s);
+  p.bezierCurveTo(-0.95 * s, 0.42 * s, -0.55 * s, 0.97 * s, 0.0, 0.99 * s);
+  p.bezierCurveTo(0.55 * s, 1.0 * s, 0.93 * s, 0.6 * s, 1.0 * s, 0.1 * s);
+  p.closePath();
+  return p;
+}
+function blobPath(cx, cy, r, R, k = 10, squash = 1) {
+  const pts = [];
+  for (let i = 0; i < k; i++) { const a = (i / k) * TAU, rr = r * (0.7 + R() * 0.55); pts.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr * squash]); }
+  const p = new Path2D(), n = pts.length;
+  p.moveTo((pts[n - 1][0] + pts[0][0]) / 2, (pts[n - 1][1] + pts[0][1]) / 2);
+  for (let i = 0; i < n; i++) { const a = pts[i], b = pts[(i + 1) % n]; p.quadraticCurveTo(a[0], a[1], (a[0] + b[0]) / 2, (a[1] + b[1]) / 2); }
+  p.closePath();
+  return p;
+}
+// 边缘柔和的填充：用阴影模糊做出羽化边
+function softFill(g, path, color, blur) {
+  g.save();
+  g.shadowColor = color; g.shadowBlur = blur * DPR;
+  g.shadowOffsetX = 10000 * DPR; g.shadowOffsetY = 0;
+  g.translate(-10000, 0); g.fillStyle = color; g.fill(path);
+  g.restore();
+}
+
+/* ---------- 预渲染身体贴图：多层光影，营造立体感 ---------- */
+function buildSprite(f) {
+  const s = f.s, v = f.v, R = seeded(f.seed), r = (a, b) => a + R() * (b - a);
+  const ox = 1.35 * s, oy = 1.2 * s;
+  const c = makeCanvas(2.7 * s * DPR, 2.4 * s * DPR), g = c.getContext("2d");
+  g.scale(DPR, DPR); g.translate(ox, oy);
+  const body = bodyPath(s);
+  const head = v.head || v.body;
+
+  // 1 底色：上深下浅
+  g.save(); g.clip(body);
+  const base = g.createLinearGradient(0, -s, 0, s);
+  base.addColorStop(0, mix(v.body, "#000000", 0.12)); base.addColorStop(0.5, v.body); base.addColorStop(1, v.belly || v.body);
+  g.fillStyle = base; g.fillRect(-1.4 * s, -1.2 * s, 2.8 * s, 2.4 * s);
+
+  // 2 花纹
+  const inBody = (x, y) => (x * x) / 0.9 + (y * y) / 0.8 < 0.85;
+  for (const p of v.parts || []) {
+    if (p.t === "back" || p.t === "belly") {
+      const path = new Path2D();
+      const yb = p.y * s, sign = p.t === "back" ? -1 : 1;
+      path.moveTo(-1.3 * s, sign * 1.3 * s);
+      for (let x = -1.3; x <= 1.3; x += 0.1) path.lineTo(x * s, yb + Math.sin(x * 5 + R() * 2) * 0.06 * s + (R() - 0.5) * 0.05 * s);
+      path.lineTo(1.3 * s, sign * 1.3 * s); path.closePath();
+      softFill(g, path, p.c, s * 0.08);
+    } else if (p.t === "stripe") {
+      const path = new Path2D();
+      path.moveTo(0.4 * s, -0.72 * s);
+      path.bezierCurveTo(0.1 * s, -0.95 * s, -0.45 * s, -0.95 * s, -0.95 * s, -0.4 * s);
+      path.lineTo(-0.85 * s, -0.05 * s);
+      path.bezierCurveTo(-0.5 * s, -0.4 * s, 0.0, -0.2 * s, 0.35 * s, -0.35 * s);
+      path.closePath();
+      softFill(g, path, p.c, s * 0.06);
+    } else if (p.t === "tiger") {
+      for (let i = 0; i < p.n; i++) {
+        const x = r(-0.95, 0.4) * s, w = r(0.06, 0.13) * s;
+        const path = new Path2D();
+        path.moveTo(x, -1.0 * s);
+        for (let y = -1.0; y <= 1.0; y += 0.2) path.lineTo(x + Math.sin(y * 4 + i) * 0.08 * s + r(-0.04, 0.04) * s, y * s);
+        for (let y = 1.0; y >= -1.0; y -= 0.2) path.lineTo(x + w + Math.sin(y * 4 + i + 1) * 0.08 * s + r(-0.04, 0.04) * s, y * s);
+        path.closePath();
+        softFill(g, path, p.c, s * 0.04);
+      }
+    } else {
+      const n = p.n, small = p.t === "spots";
+      for (let i = 0; i < n; i++) {
+        let x, y, tries = 0;
+        do { x = r(-0.95, 0.55); y = r(-0.9, 0.85); } while (!inBody(x, y) && ++tries < 20);
+        if (p.at) { x = p.at[0]; y = p.at[1]; }
+        const rr = r(p.r[0], p.r[1]) * s;
+        softFill(g, blobPath(x * s, y * s, rr, R, small ? 7 : 11, r(0.7, 1.1)), p.c, small ? s * 0.012 : s * 0.035);
+      }
+    }
+  }
+
+  // 3 头部颜色
+  if (v.headMode === "full") softFill(g, (() => { const p = new Path2D(); p.ellipse(0.72 * s, -0.04 * s, 0.46 * s, 0.78 * s, -0.08, 0, TAU); return p; })(), head, s * 0.07);
+  if (v.headMode === "gill") softFill(g, (() => { const p = new Path2D(); p.ellipse(0.95 * s, 0.0, 0.68 * s, 1.2 * s, 0, 0, TAU); return p; })(), head, s * 0.025);
+
+  // 4 鳞片：一排排向后的弧边，金属品种更亮
+  const sc = s * 0.17 * (v.scale || 1), metal = v.metal ?? 0.25;
+  let row = 0;
+  for (let y = -1.0 * s; y < 1.0 * s; y += sc * 0.6, row++) {
+    for (let x = -1.05 * s + (row % 2 ? sc * 0.45 : 0); x < 0.45 * s; x += sc * 0.9) {
+      const fade = clamp((0.42 * s - x) / (0.3 * s), 0, 1);
+      if (fade <= 0) continue;
+      const shine = (0.04 + metal * 0.2 * r(0.4, 1.2)) * fade;
+      const sg = g.createRadialGradient(x + sc * 0.1, y - sc * 0.15, 0, x, y, sc * 0.55);
+      sg.addColorStop(0, `rgba(255,255,255,${shine})`); sg.addColorStop(1, "rgba(255,255,255,0)");
+      g.fillStyle = sg; g.beginPath(); g.arc(x, y, sc * 0.55, 0, TAU); g.fill();
+      g.strokeStyle = `rgba(0,0,0,${(0.08 + metal * 0.05) * fade})`; g.lineWidth = sc * 0.07;
+      g.beginPath(); g.arc(x, y, sc * 0.52, Math.PI / 2 + 0.35, Math.PI * 1.5 - 0.35); g.stroke();
+      g.strokeStyle = `rgba(255,255,255,${(0.1 + metal * 0.15) * fade})`; g.lineWidth = sc * 0.04;
+      g.beginPath(); g.arc(x + sc * 0.06, y, sc * 0.45, Math.PI / 2 + 0.6, Math.PI * 1.5 - 0.6); g.stroke();
+    }
+  }
+
+  // 5 体积感：边缘暗、上方受光、背上高光、边缘透光
+  const ao = g.createRadialGradient(0.05 * s, -0.3 * s, 0, 0.05 * s, -0.25 * s, 1.35 * s);
+  ao.addColorStop(0, "rgba(0,0,0,0)"); ao.addColorStop(0.55, "rgba(0,0,0,0)"); ao.addColorStop(1, "rgba(10,5,0,0.42)");
+  g.fillStyle = ao; g.fillRect(-1.4 * s, -1.2 * s, 2.8 * s, 2.4 * s);
+  const belly = g.createLinearGradient(0, 0.3 * s, 0, s);
+  belly.addColorStop(0, "rgba(0,0,0,0)"); belly.addColorStop(1, "rgba(20,10,0,0.22)");
+  g.fillStyle = belly; g.fillRect(-1.4 * s, 0, 2.8 * s, 1.2 * s);
+  const top = g.createRadialGradient(-0.1 * s, -0.6 * s, 0, -0.1 * s, -0.6 * s, 0.8 * s);
+  top.addColorStop(0, "rgba(255,255,255,0.32)"); top.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = top; g.fillRect(-1.4 * s, -1.2 * s, 2.8 * s, 2.4 * s);
+  const spec = new Path2D(); spec.ellipse(-0.18 * s, -0.78 * s, 0.34 * s, 0.07 * s, -0.12, 0, TAU);
+  softFill(g, spec, "rgba(255,255,255,0.55)", s * 0.06);
+  g.strokeStyle = "rgba(255,255,255,0.22)"; g.lineWidth = 0.07 * s; g.stroke(body);
+  g.restore();
+
+  // 6 头瘤：几大团软软鼓起的肉，盖住头顶、腮和鳃盖
+  const k = f.wen;
+  const lobes = [
+    { n: "gill", x: 0.42, y: 0.12, rx: 0.22, ry: 0.36 },
+    { n: "hood", x: 0.5, y: -0.52, rx: 0.36, ry: 0.27 },
+    { n: "hood2", x: 0.74, y: -0.3, rx: 0.25, ry: 0.23 },
+    { n: "chin", x: 0.84, y: 0.44, rx: 0.19, ry: 0.15 },
+    { n: "cheek", x: 0.72, y: 0.17, rx: 0.3, ry: 0.32 },
+    { n: "snout", x: 0.9, y: -0.02, rx: 0.13, ry: 0.16 },
+  ];
+  // 先铺一整块肉瘤底，几团肉在上面鼓起来，就不会像分开的球
+  {
+    const col0 = v.headMode === "cap" ? head : v.headMode ? head : mix(v.body, head, 0.6);
+    const mg = g.createRadialGradient(0.62 * s, -0.25 * s, 0.05 * s, 0.68 * s, 0.0, 0.75 * s * k);
+    mg.addColorStop(0, mix(col0, "#ffffff", 0.14)); mg.addColorStop(0.75, col0); mg.addColorStop(1, mix(col0, "#2a0e00", 0.08));
+    const mass = new Path2D(); mass.ellipse(0.66 * s, -0.04 * s, 0.4 * s * k, 0.66 * s * k, -0.1, 0, TAU);
+    g.save(); g.clip(body); g.fillStyle = mg; g.fill(mass); g.restore();
+  }
+  for (const L of lobes) {
+    const x = (L.x + (L.x - 0.6) * (k - 1) * 0.3) * s, y = (L.y * (0.9 + 0.1 * k)) * s;
+    const rx = L.rx * s * k * r(0.92, 1.08), ry = L.ry * s * k * r(0.92, 1.08);
+    let col = v.headMode === "cap" ? (L.n === "hood" || L.n === "hood2" ? v.cap : head) : v.headMode ? head : mix(v.body, head, 0.6);
+    const lg = g.createRadialGradient(x - rx * 0.35, y - ry * 0.45, Math.min(rx, ry) * 0.1, x, y, Math.max(rx, ry) * 1.05);
+    lg.addColorStop(0, mix(col, "#ffffff", 0.2)); lg.addColorStop(0.65, col); lg.addColorStop(1, rgba(hexOf(mix(col, "#2a0e00", 0.14)), 0));
+    g.fillStyle = lg; g.beginPath(); g.ellipse(x, y, rx * 1.12, ry * 1.12, 0, 0, TAU); g.fill();
+    // 瘤上细小的褶皱
+    g.save(); g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, TAU); g.clip();
+    for (let i = 0; i < 14; i++) {
+      const a = r(0, TAU), d = Math.sqrt(R()) * 0.85, bx = x + Math.cos(a) * rx * d, by = y + Math.sin(a) * ry * d, br = r(0.03, 0.06) * s;
+      g.fillStyle = "rgba(255,255,255,0.10)"; g.beginPath(); g.arc(bx - br * 0.3, by - br * 0.3, br, 0, TAU); g.fill();
+      g.strokeStyle = "rgba(60,20,0,0.07)"; g.lineWidth = br * 0.3; g.beginPath(); g.arc(bx, by, br, 0.3, 2.4); g.stroke();
+    }
+    g.restore();
+  }
+
+  // 7 眼睛：陷在肉瘤之间
+  const ex = 0.7 * s, ey = 0.0, er = 0.078 * s;
+  if (v.eyePatch) softFill(g, blobPath(ex, ey + 0.02 * s, 0.17 * s, R, 9, 0.9), "#1c1c20", s * 0.03);
+  const sock = g.createRadialGradient(ex, ey, er * 0.5, ex, ey, er * 2);
+  sock.addColorStop(0, "rgba(40,10,0,0.45)"); sock.addColorStop(1, "rgba(40,10,0,0)");
+  g.fillStyle = sock; g.beginPath(); g.arc(ex, ey, er * 2, 0, TAU); g.fill();
+  g.fillStyle = "#d9b45a"; g.beginPath(); g.arc(ex, ey, er, 0, TAU); g.fill();
+  g.fillStyle = "#0e0e10"; g.beginPath(); g.arc(ex + er * 0.12, ey + er * 0.05, er * 0.74, 0, TAU); g.fill();
+  g.fillStyle = "rgba(255,255,255,0.95)"; g.beginPath(); g.arc(ex - er * 0.2, ey - er * 0.32, er * 0.28, 0, TAU); g.fill();
+  // 嘴
+  g.fillStyle = v.lips || mix(head, "#3a0a00", 0.35);
+  g.beginPath(); g.ellipse(1.0 * s, 0.26 * s, 0.06 * s, 0.045 * s, 0.3, 0, TAU); g.fill();
+  g.fillStyle = "rgba(30,5,0,0.6)"; g.beginPath(); g.ellipse(1.02 * s, 0.27 * s, 0.025 * s, 0.018 * s, 0.3, 0, TAU); g.fill();
+
+  f.sprite = { c, ox, oy };
+}
+
+/* ---------- 鳍：半透明，根部浓、末端淡，带鳍条 ---------- */
+function drawFin(g, len, wid, color, rays, wave, alpha) {
+  const path = new Path2D();
+  path.moveTo(0, -wid * 0.22);
+  path.bezierCurveTo(len * 0.4, -wid * 0.95, len * 0.88, -wid * 0.7 + wave, len, wave * 0.6);
+  path.bezierCurveTo(len * 0.92, wid * 0.25 + wave, len * 0.97, wid * 0.55, len * 0.8, wid * 0.62);
+  path.bezierCurveTo(len * 0.45, wid * 0.75, len * 0.2, wid * 0.45, 0, wid * 0.22);
+  path.closePath();
+  const fg = g.createLinearGradient(0, 0, len, 0);
+  fg.addColorStop(0, rgba(color, 0.9 * alpha)); fg.addColorStop(0.6, rgba(color, 0.55 * alpha)); fg.addColorStop(1, rgba(color, 0.28 * alpha));
+  g.fillStyle = fg; g.fill(path);
+  g.save(); g.clip(path);
+  g.strokeStyle = rays; g.lineWidth = Math.max(0.6, len * 0.012); g.globalAlpha *= alpha;
+  const n = Math.max(4, Math.round(len / 7));
+  for (let i = 0; i < n; i++) { const t = (i + 0.5) / n; g.beginPath(); g.moveTo(0, 0); g.quadraticCurveTo(len * 0.5, lerp(-wid * 0.6, wid * 0.5, t) + wave * 0.3, len, lerp(-wid * 0.85, wid * 0.7, t) + wave * 0.6); g.stroke(); }
+  g.restore();
+  g.strokeStyle = `rgba(255,255,255,${0.25 * alpha})`; g.lineWidth = 0.8; g.stroke(path);
+}
+
+function drawRanchu(f, g) {
+  const k = 0.86 + 0.2 * (1 - f.z), s = f.s, v = f.v;
+  const fx = Math.abs(f.face) < 0.12 ? 0.12 * (f.face < 0 ? -1 : 1) : f.face;
+  const roll = Math.sin(f.phase * 0.5) * 0.035;
+  g.save();
+  g.translate(f.x, f.y);
+  g.rotate((f.face < 0 ? -f.tilt : f.tilt) + roll);
+  g.scale(fx * k, k);
+  g.globalAlpha = 0.86 + 0.14 * (1 - f.z);
+  const rays = v.rays || "rgba(255,255,255,0.4)";
+  const wag = Math.sin(f.phase) * 0.28, wave = Math.sin(f.phase - 1.2) * s * 0.1;
+
+  // 远侧：尾、胸鳍、腹鳍
+  g.save(); g.translate(-0.98 * s, -0.18 * s); g.rotate(Math.PI - 0.75 + wag * 0.8); drawFin(g, 0.8 * s, 0.42 * s, v.fin, rays, wave, 0.55); g.restore();
+  g.save(); g.translate(-0.98 * s, -0.08 * s); g.rotate(Math.PI - 0.1 + wag * 0.8); drawFin(g, 0.72 * s, 0.38 * s, v.fin, rays, -wave, 0.55); g.restore();
+  g.save(); g.translate(0.05 * s, 0.88 * s); g.rotate(1.75 + Math.sin(f.phase * 0.8) * 0.2); drawFin(g, 0.34 * s, 0.2 * s, v.fin, rays, 0, 0.5); g.restore();
+
+  g.drawImage(f.sprite.c, -f.sprite.ox, -f.sprite.oy, f.sprite.c.width / DPR, f.sprite.c.height / DPR);
+
+  // 眨眼
+  if (f.blink < 0) { g.fillStyle = mix(v.headMode ? v.head : v.body, "#000000", 0.15); g.beginPath(); g.ellipse(0.7 * s, 0, 0.08 * s, 0.075 * s, 0, 0, TAU); g.fill(); }
+  // 吃东西时嘴一张一合
+  if (f.gulp > 0) { const o = Math.abs(Math.sin(f.gulp * 18)); g.fillStyle = "rgba(30,5,0,0.85)"; g.beginPath(); g.ellipse(1.02 * s, 0.27 * s, 0.04 * s, 0.02 * s + 0.05 * s * o, 0.3, 0, TAU); g.fill(); }
+
+  // 近侧：胸鳍、腹鳍、臀鳍、尾
+  g.save(); g.translate(0.4 * s, 0.55 * s); g.rotate(2.0 + Math.sin(f.phase * 0.9) * 0.3); drawFin(g, 0.42 * s, 0.24 * s, v.fin, rays, 0, 0.85); g.restore();
+  g.save(); g.translate(-0.05 * s, 0.92 * s); g.rotate(1.7 + Math.sin(f.phase * 0.8 + 1) * 0.2); drawFin(g, 0.38 * s, 0.22 * s, v.fin, rays, 0, 0.85); g.restore();
+  g.save(); g.translate(-0.68 * s, 0.68 * s); g.rotate(2.15 + Math.sin(f.phase + 2) * 0.15); drawFin(g, 0.26 * s, 0.16 * s, v.fin, rays, 0, 0.8); g.restore();
+  g.save(); g.translate(-0.98 * s, -0.14 * s); g.rotate(Math.PI - 0.55 + wag); drawFin(g, 0.9 * s, 0.46 * s, v.fin, rays, wave, 0.9); g.restore();
+  g.save(); g.translate(-0.98 * s, -0.04 * s); g.rotate(Math.PI + 0.05 + wag); drawFin(g, 0.82 * s, 0.42 * s, v.fin, rays, -wave, 0.9); g.restore();
+  g.restore();
+}
+
+// 鼠标停在鱼身上时，显示品种名
+function drawNameTag(g) {
+  if (T - pointer.last > 2 || !pointer.inWater) return;
+  let hit = null;
+  for (const f of fishes) { if (Math.hypot(pointer.x - f.x, pointer.y - f.y) < f.s * 1.05 && (!hit || f.z < hit.z)) hit = f; }
+  if (!hit) return;
+  const text = hit.v.name;
+  g.font = `500 ${Math.round(13 * Math.max(1, S))}px -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif`;
+  const w = g.measureText(text).width + 20 * S, h = 24 * S, x = hit.x - w / 2, y = hit.y - hit.s * 1.25 - h;
+  g.fillStyle = "rgba(15,30,28,0.6)"; roundRect(g, x, y, w, h, h / 2); g.fill();
+  g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(text, hit.x, y + h / 2 + 0.5);
+}
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+}
+
+const fishes = [];
+function syncFish() {
+  const n = clamp(config.fishCount | 0, 1, 16);
+  while (fishes.length < n) fishes.push(new Ranchu());
+  while (fishes.length > n) fishes.pop();
+}
+
+function fishBounds(f, y) {
+  const top = tank.level + f.s * 1.0;
+  const yy = Math.max(y, top);
+  const bot = gravelTop(clamp(f.x, 0, W)) - f.s * 1.15;
+  return { top, bot: Math.max(top + 10, bot), l: f.s * 1.7 + W * 0.02, r: W - f.s * 1.7 - W * 0.02 };
+}
+
+function updateFish(f, dt) {
+  const b = fishBounds(f, f.y);
+  let maxSp = 34 * S, mode = "wander";
+  // 1. 鱼食优先
+  let best = null, bd = 1e9;
+  for (const p of pellets) {
+    if (p.state === "air" || p.eaten) continue;
+    const d = Math.hypot(p.x - f.x, p.y - f.y);
+    if (d < bd) { bd = d; best = p; }
+  }
+  if (best && f.full < 4) {
+    mode = "food"; maxSp = 62 * S;
+    f.tx = best.x - f.face * f.s * 0.95; f.ty = best.y - f.s * 0.05;
+    if (best.state === "float") f.ty = best.y + f.s * 0.55; // 浮在水面的，要抬头去啄
+    const mx = f.x + f.face * f.s * 1.0, my = f.y + (best.state === "float" ? -f.s * 0.45 : f.s * 0.05);
+    if (Math.hypot(best.x - mx, best.y - my) < f.s * 0.45) {
+      best.eaten = true; f.gulp = 0.5; f.full++;
+      if (best.state === "float") splash(best.x, 18 * S, 1);
+      for (let k = 0; k < 3; k++) bubbles.push(newBubble(best.x, best.y + 3 * S, rand(1.5, 3) * S));
+    }
+  } else if (pointer.inWater && T - pointer.last < 3 && Math.hypot(pointer.x - f.x, pointer.y - f.y) < 360 * S) {
+    // 2. 好奇地靠近手指
+    mode = "pointer"; maxSp = 46 * S;
+    const side = f.x < pointer.x ? -1 : 1;
+    f.tx = pointer.x + side * f.s * 1.9; f.ty = pointer.y + Math.sin(T * 1.4 + f.phase) * 6 * S;
+  } else {
+    // 3. 慢悠悠闲逛
+    f.retarget -= dt;
+    if (f.retarget <= 0 || Math.hypot(f.tx - f.x, f.ty - f.y) < 20 * S) {
+      const ny = rand(b.top, b.bot), nb = fishBounds(f, ny);
+      f.tx = rand(nb.l, nb.r); f.ty = ny; f.retarget = rand(4, 10);
+      if (Math.random() < 0.25) f.ty = rand(b.bot - 40 * S, b.bot); // 金鱼爱在缸底翻找
+    }
+  }
+  f.full = Math.max(0, f.full - dt * 0.05);
+  // 分开一点
+  let ax = 0, ay = 0;
+  for (const o of fishes) {
+    if (o === f) continue;
+    const dx = f.x - o.x, dy = f.y - o.y, d = Math.hypot(dx, dy), m = (f.s + o.s) * 1.3;
+    if (d < m && d > 0.1 && Math.abs(f.z - o.z) < 0.5) { ax += (dx / d) * (m - d) * 2; ay += (dy / d) * (m - d) * 2; }
+  }
+  const dx = f.tx - f.x, dy = f.ty - f.y, d = Math.hypot(dx, dy) || 1;
+  const want = Math.min(maxSp, d * 1.4);
+  const dvx = (dx / d) * want - f.vx + ax, dvy = (dy / d) * want * 0.7 - f.vy + ay;
+  const acc = (mode === "food" ? 90 : 45) * S;
+  const dl = Math.hypot(dvx, dvy) || 1, a = Math.min(acc * dt, dl);
+  f.vx += (dvx / dl) * a; f.vy += (dvy / dl) * a;
+  f.x += f.vx * dt; f.y += (f.vy + Math.sin(T * 1.7 + f.phase) * 3 * S) * dt;
+  const nb = fishBounds(f, f.y);
+  f.y = clamp(f.y, nb.top, nb.bot); f.x = clamp(f.x, nb.l, nb.r);
+  // 转身：朝向在 -1..1 之间过渡，看起来像在水里转了个身
+  const wantFace = Math.abs(f.vx) > 4 * S ? Math.sign(f.vx) : f.face >= 0 ? 1 : -1;
+  f.face = clamp(f.face + clamp(wantFace - f.face, -dt * 2.6, dt * 2.6), -1, 1);
+  let tilt = Math.atan2(f.vy, Math.abs(f.vx) + 15 * S) * 0.8;
+  if (mode === "food" && best && best.state === "float" && Math.abs(f.x + f.face * f.s - best.x) < f.s * 2) tilt = -0.55;
+  f.tilt = lerp(f.tilt, clamp(tilt, -0.6, 0.45), 1 - Math.exp(-dt * 3));
+  const sp = Math.hypot(f.vx, f.vy) / S;
+  f.phase += dt * (3.2 + sp * 0.09);
+  f.blink -= dt; if (f.blink < -0.14) f.blink = rand(2.5, 7);
+  f.gulp = Math.max(0, f.gulp - dt);
+  if (Math.random() < dt * 0.06) bubbles.push(newBubble(f.x + f.face * f.s * 1.05, f.y, rand(1.6, 3) * S));
+  f.z = clamp(f.z + Math.sin(T * 0.07 + f.phase) * dt * 0.02, 0, 1);
+}
+
+/* ============================================================
+   气泡、气石、鱼食
+   ============================================================ */
+const bubbles = [];
+function newBubble(x, y, r) { return { x, y, r, vy: -rand(40, 70) * S, ph: rand(TAU) }; }
+let airstone = { x: 0, y: 0 }, airAcc = 0;
+function updateBubbles(g, dt) {
+  // 气石持续冒泡
+  airAcc += dt * 14;
+  while (airAcc > 1) { airAcc--; bubbles.push({ x: airstone.x + rand(-6, 6) * S, y: airstone.y - 6 * S, r: rand(1.8, 4.2) * S, vy: -rand(90, 150) * S, ph: rand(TAU), air: true }); }
+  for (let i = bubbles.length - 1; i >= 0; i--) {
+    const b = bubbles[i];
+    b.y += b.vy * dt; b.x += Math.sin(T * 5 + b.ph) * (b.air ? 18 : 8) * S * dt; b.r *= 1 + dt * 0.06;
+    if (b.y < surfaceY(b.x) + b.r) { bubbles.splice(i, 1); if (b.air && Math.random() < 0.35) splash(b.x, -14 * S, 1); continue; }
+    g.strokeStyle = "rgba(255,255,255,0.7)"; g.lineWidth = Math.max(0.8, b.r * 0.22);
+    g.beginPath(); g.arc(b.x, b.y, b.r, 0, TAU); g.stroke();
+    g.fillStyle = "rgba(255,255,255,0.15)"; g.fill();
+    g.fillStyle = "rgba(255,255,255,0.9)"; g.beginPath(); g.arc(b.x - b.r * 0.35, b.y - b.r * 0.35, b.r * 0.25, 0, TAU); g.fill();
+  }
+  if (bubbles.length > 300) bubbles.splice(0, bubbles.length - 300);
+}
+function drawAirstone(g) {
+  const { x, y } = airstone;
+  g.strokeStyle = "rgba(220,235,235,0.35)"; g.lineWidth = 2 * S;
+  g.beginPath(); g.moveTo(x + 12 * S, y); g.bezierCurveTo(x + 40 * S, y - 40 * S, W - 20 * S, tank.level + 120 * S, W - 18 * S, tank.level - 10 * S); g.stroke();
+  const sg = g.createLinearGradient(0, y - 8 * S, 0, y + 8 * S);
+  sg.addColorStop(0, "#c9c5bd"); sg.addColorStop(1, "#7d7a74");
+  g.fillStyle = sg; g.beginPath(); g.ellipse(x, y, 18 * S, 8 * S, 0, 0, TAU); g.fill();
+}
+
+const pellets = [];
+function feed(x) {
+  const n = 7 + ((Math.random() * 4) | 0);
+  for (let k = 0; k < n; k++) {
+    const px = clamp(x + rand(-34, 34) * S, 20 * S, W - 20 * S);
+    pellets.push({ x: px, y: tank.level - rand(30, 80) * S, vy: rand(0, 60) * S, state: "air", t: 0, r: rand(3, 4.2) * Math.max(1, S), eaten: false, c: pick(["#c0742e", "#a85d25", "#d48b3e", "#8a4f20"]), ph: rand(TAU), wait: rand(2, 5) });
+  }
+  hintOff();
+}
+function updatePellets(g, dt) {
+  for (let i = pellets.length - 1; i >= 0; i--) {
+    const p = pellets[i]; p.t += dt;
+    if (p.eaten || p.t > 70) { pellets.splice(i, 1); continue; }
+    const sy = surfaceY(p.x);
+    if (p.state === "air") {
+      p.vy += 900 * S * dt; p.y += p.vy * dt;
+      if (p.y >= sy) { p.y = sy; p.state = "float"; p.t = 0; splash(p.x, 10 * S, 1); }
+      continue; // 还在灯罩里，看不见
+    } else if (p.state === "float") {
+      p.y = sy + p.r * 0.6; p.x += Math.sin(T + p.ph) * 4 * S * dt;
+      if (p.t > p.wait) { p.state = "sink"; p.vy = rand(10, 16) * S; }
+    } else {
+      p.y += p.vy * dt; p.x += Math.sin(T * 1.5 + p.ph) * 6 * S * dt;
+      const floor = gravelTop(p.x) + 2 * S;
+      if (p.y > floor) { p.y = floor; p.vy = 0; }
+    }
+    g.fillStyle = p.c; g.beginPath(); g.arc(p.x, p.y, p.r, 0, TAU); g.fill();
+    g.fillStyle = "rgba(255,235,200,0.6)"; g.beginPath(); g.arc(p.x - p.r * 0.3, p.y - p.r * 0.3, p.r * 0.35, 0, TAU); g.fill();
+  }
+}
+
+/* ============================================================
+   前玻璃、光照
+   ============================================================ */
+function drawGlass(g) {
+  // 前玻璃上淡淡的斜向反光
+  g.save(); g.globalCompositeOperation = "lighter";
+  const rg = g.createLinearGradient(W * 0.55, 0, W * 0.85, H);
+  rg.addColorStop(0, "rgba(255,255,255,0)"); rg.addColorStop(0.45, "rgba(255,255,255,0.035)"); rg.addColorStop(0.5, "rgba(255,255,255,0.06)"); rg.addColorStop(0.55, "rgba(255,255,255,0.035)"); rg.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = rg; g.fillRect(0, tank.level, W, H - tank.level);
+  g.restore();
+  // 左右两条玻璃边与硅胶
+  for (const x of [0, W]) {
+    const eg = g.createLinearGradient(x, 0, x + (x ? -26 : 26) * S, 0);
+    eg.addColorStop(0, "rgba(10,25,22,0.55)"); eg.addColorStop(0.35, "rgba(160,220,210,0.25)"); eg.addColorStop(1, "rgba(160,220,210,0)");
+    g.fillStyle = eg; g.fillRect(x ? W - 26 * S : 0, 0, 26 * S, H);
+  }
+  // 底部边框
+  g.fillStyle = "rgba(10,20,18,0.55)"; g.fillRect(0, H - 6 * S, W, 6 * S);
+}
+
+let dayLight = 1;
+function computeLight() {
+  if (config.timeMode === "day") return 1;
+  if (config.timeMode === "night") return 0;
+  if (config.timeMode === "dusk") return 0.5;
+  const d = new Date(), h = d.getHours() + d.getMinutes() / 60;
+  if (h >= 8 && h <= 21) return 1;               // 鱼缸灯一般白天开着
+  if (h > 21 && h < 22) return 22 - h;
+  if (h > 7 && h < 8) return h - 7;
+  return 0;
+}
+function drawLighting(g) {
+  const night = 1 - dayLight;
+  if (night < 0.01) return;
+  g.globalCompositeOperation = "multiply";
+  g.fillStyle = mix("#ffffff", "#24345e", night * 0.8); g.fillRect(0, 0, W, H);
+  g.globalCompositeOperation = "lighter";
+  const mg = g.createLinearGradient(0, 0, 0, H * 0.7);
+  mg.addColorStop(0, `rgba(90,130,220,${0.22 * night})`); mg.addColorStop(1, "rgba(90,130,220,0)");
+  g.fillStyle = mg; g.fillRect(0, 0, W, H);
+  g.globalCompositeOperation = "source-over";
+}
+
+/* ============================================================
+   主循环
+   ============================================================ */
+let last = performance.now(), lastDraw = 0, rafId = 0, readySent = false;
+function frame(now) {
+  rafId = requestAnimationFrame(frame);
+  if (now - lastDraw < 1000 / (config.fps || 60) - 2) return;
+  lastDraw = now;
+  const dt = Math.min(0.05, (now - last) / 1000); last = now; T += dt;
+  step(dt);
+  if (!readySent) { readySent = true; post({ type: "ready" }); }
+}
+function step(dt) {
+  dayLight = lerp(dayLight, computeLight(), 1 - Math.exp(-dt * 2));
+  updateWaves(dt);
+  for (const f of fishes) updateFish(f, dt);
+  const g = ctx;
+  g.setTransform(DPR, 0, 0, DPR, 0, 0); g.globalCompositeOperation = "source-over"; g.globalAlpha = 1;
+  g.drawImage(backdrop, 0, 0, W, H);
+  drawRays(g);
+  drawPlants(g, true);
+  g.drawImage(hardscape, 0, 0, W, H);
+  g.drawImage(gravelLayer, 0, 0, W, H);
+  drawGravelCaustics(g);
+  drawAirstone(g);
+  drawMotes(g, dt);
+  const sorted = [...fishes].sort((a, b) => b.z - a.z);
+  for (const f of sorted) drawRanchu(f, g);
+  g.globalAlpha = 1;
+  updatePellets(g, dt);
+  updateBubbles(g, dt);
+  drawPlants(g, false);
+  drawNameTag(g);
+  // 一层很淡的水色压在最前面，让东西都像泡在水里
+  g.fillStyle = "rgba(90,160,150,0.06)"; g.fillRect(0, tank.level, W, H - tank.level);
+  drawSurfaceAndLid(g);
+  drawGlass(g);
+  drawLighting(g);
+  pointer.speed *= Math.exp(-dt * 8);
+}
+
+/* ============================================================
+   交互
+   ============================================================ */
+const pointer = { x: -1e4, y: -1e4, last: -1e9, inWater: false, speed: 0 };
+function onPointer(x, y, type) {
+  if (type === "leave") { pointer.inWater = false; pointer.last = -1e9; return; }
+  if (type === "move" && T - pointer.last < 0.5) pointer.speed = Math.max(pointer.speed, Math.hypot(x - pointer.x, y - pointer.y) / Math.max(0.008, T - pointer.last));
+  pointer.x = x; pointer.y = y; pointer.last = T;
+  pointer.inWater = inWater(x, y);
+  if (type === "down") feed(x);
+}
+if (!HOST) {
+  addEventListener("pointermove", (e) => onPointer(e.clientX, e.clientY, "move"));
+  addEventListener("pointerdown", (e) => onPointer(e.clientX, e.clientY, "down"));
+  document.addEventListener("pointerleave", () => onPointer(0, 0, "leave"));
+}
+let hintTimer = 0;
+function hintOff(ms = 0) { clearTimeout(hintTimer); hintTimer = setTimeout(() => document.getElementById("hint").classList.add("hidden"), ms); }
+
+window.pond = {
+  pointer: (x, y, t) => onPointer(x, y, t),
+  setConfig(c) {
+    const oq = config.quality;
+    Object.assign(config, c || {});
+    if (!HOST) try { localStorage.setItem("ranchu-tank", JSON.stringify(config)); } catch (e) {}
+    if (oq !== config.quality) resize();
+    syncFish();
+    const tag = document.getElementById("tag");
+    tag.textContent = config.name && config.name !== "半亩塘" ? config.name : "兰寿缸";
+    tag.classList.toggle("hidden", !config.showTitle);
+  },
+  pause(p) { cancelAnimationFrame(rafId); if (!p) { last = performance.now(); rafId = requestAnimationFrame(frame); } },
+  feed: (x) => feed(x ?? W / 2),
+  getConfig: () => ({ ...config }),
+};
+
+function resize() {
+  W = innerWidth; H = innerHeight;
+  DPR = Math.min(window.devicePixelRatio || 1, config.quality === "saver" ? 1 : 2);
+  S = clamp(Math.min(W, H) / 900, 0.55, 1.6);
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  computeTank();
+  surfL = 0; surfR = W;
+  paintBackdrop(); paintHardscape(); paintGravel(); layoutPlants();
+  airstone = { x: W * 0.88, y: gravelTop(W * 0.88) + 2 * S };
+  for (const f of fishes) { buildSprite(f); const b = fishBounds(f, f.y); f.x = clamp(f.x, b.l, b.r); f.y = clamp(f.y, b.top, b.bot); }
+}
+resize();
+syncFish();
+dayLight = computeLight();
+hintOff(12000);
+addEventListener("resize", () => { resize(); step(0); });
+document.addEventListener("visibilitychange", () => { if (!HOST) window.pond.pause(document.hidden); });
+rafId = requestAnimationFrame(frame);
+</script>
+</body>
+</html>

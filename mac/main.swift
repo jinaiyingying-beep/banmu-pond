@@ -27,6 +27,8 @@ struct PondConfig: Codable {
     var quality = "auto"
     var city: City? = nil
     var interactive = true
+    var scene = "pond"          // pond 锦鲤池 / aquarium 兰寿缸
+    var tankFishCount = 9
 
     init() {}
 
@@ -45,6 +47,8 @@ struct PondConfig: Codable {
         quality = (try? c.decodeIfPresent(String.self, forKey: .quality)) ?? d.quality
         city = try? c.decodeIfPresent(City.self, forKey: .city)
         interactive = (try? c.decodeIfPresent(Bool.self, forKey: .interactive)) ?? d.interactive
+        scene = (try? c.decodeIfPresent(String.self, forKey: .scene)) ?? d.scene
+        tankFishCount = (try? c.decodeIfPresent(Int.self, forKey: .tankFishCount)) ?? d.tankFishCount
     }
 }
 
@@ -144,9 +148,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var activity: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard let url = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "web") else {
+        guard let url = sceneURL() else {
             let a = NSAlert()
-            a.messageText = "找不到池塘页面（web/index.html）"
+            a.messageText = "找不到池塘页面（web 文件夹）"
             a.informativeText = "请用 build.sh 重新打包。"
             a.runModal()
             NSApp.terminate(nil)
@@ -187,8 +191,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: 窗口管理
 
+    var isTank: Bool { config.scene == "aquarium" }
+
+    func sceneURL() -> URL? {
+        let name = isTank ? "aquarium" : "index"
+        return Bundle.main.url(forResource: name, withExtension: "html", subdirectory: "web")
+            ?? Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "web")
+    }
+
     func buildPonds() {
         ponds.forEach { $0.close() }
+        if let u = sceneURL() { pageURL = u }
         ponds = NSScreen.screens.map { Pond(screen: $0, pageURL: pageURL, proxy: proxy) }
         // 兜底：万一页面迟迟没报「准备好」，3 秒后也照样显示
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
@@ -226,6 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for p in targets {
             var code = "window.pond && pond.setConfig(\(json));"
             if config.city == nil { code += "window.pond && pond.setConfig({city:null});" }
+            if isTank { code += "window.pond && pond.setConfig({fishCount:\(config.tankFishCount)});" }
             p.js(code)
         }
     }
@@ -359,18 +373,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.removeAllItems()
         menu.addItem(item("撒一把鱼食", #selector(feedNow)))
         menu.addItem(.separator())
-        menu.addItem(item("池塘名字…", #selector(renamePond)))
-        let cityTitle = config.city.map { "天气城市：\($0.name)…" } ?? "设置天气城市…"
-        menu.addItem(item(cityTitle, #selector(setCity)))
-        var counts: [(String, Any, Bool)] = []
-        for n in [20, 40, 60, 80, 100, 120] { counts.append(("\(n) 尾", n, config.fishCount == n)) }
-        menu.addItem(submenu("鱼的数量", counts, #selector(pickFishCount)))
-        menu.addItem(submenu("时间", opts([("跟随真实时间", "auto"), ("白天", "day"), ("黄昏", "dusk"), ("夜晚", "night")], config.timeMode), #selector(pickTime)))
-        menu.addItem(submenu("天气", opts([("跟随真实天气", "auto"), ("晴", "clear"), ("阴", "cloudy"), ("雨", "rain"), ("雪", "snow"), ("雷雨", "storm")], config.weatherMode), #selector(pickWeather)))
-        menu.addItem(submenu("季节", opts([("跟随日期", "auto"), ("春", "spring"), ("夏", "summer"), ("秋", "autumn"), ("冬", "winter")], config.seasonMode), #selector(pickSeason)))
+        menu.addItem(submenu("场景", opts([("锦鲤池（俯视）", "pond"), ("兰寿缸（正视）", "aquarium")], config.scene), #selector(pickScene)))
         menu.addItem(.separator())
-        menu.addItem(toggle("显示池畔小记", config.showWidget, #selector(toggleWidget)))
-        menu.addItem(toggle("显示池塘名字", config.showTitle, #selector(toggleTitle)))
+        if !isTank {
+            menu.addItem(item("池塘名字…", #selector(renamePond)))
+            let cityTitle = config.city.map { "天气城市：\($0.name)…" } ?? "设置天气城市…"
+            menu.addItem(item(cityTitle, #selector(setCity)))
+        }
+        var counts: [(String, Any, Bool)] = []
+        let choices = isTank ? [3, 5, 7, 9, 12, 15] : [20, 40, 60, 80, 100, 120]
+        let current = isTank ? config.tankFishCount : config.fishCount
+        for n in choices { counts.append(("\(n) 尾", n, current == n)) }
+        menu.addItem(submenu("鱼的数量", counts, #selector(pickFishCount)))
+        let timeOpts = isTank ? [("跟随真实时间（晚上开月光灯）", "auto"), ("开灯", "day"), ("月光灯", "night")]
+                              : [("跟随真实时间", "auto"), ("白天", "day"), ("黄昏", "dusk"), ("夜晚", "night")]
+        menu.addItem(submenu(isTank ? "灯光" : "时间", opts(timeOpts, config.timeMode), #selector(pickTime)))
+        if !isTank {
+            menu.addItem(submenu("天气", opts([("跟随真实天气", "auto"), ("晴", "clear"), ("阴", "cloudy"), ("雨", "rain"), ("雪", "snow"), ("雷雨", "storm")], config.weatherMode), #selector(pickWeather)))
+            menu.addItem(submenu("季节", opts([("跟随日期", "auto"), ("春", "spring"), ("夏", "summer"), ("秋", "autumn"), ("冬", "winter")], config.seasonMode), #selector(pickSeason)))
+        }
+        menu.addItem(.separator())
+        if !isTank { menu.addItem(toggle("显示池畔小记", config.showWidget, #selector(toggleWidget))) }
+        menu.addItem(toggle(isTank ? "显示鱼缸名字" : "显示池塘名字", config.showTitle, #selector(toggleTitle)))
         menu.addItem(toggle("鼠标互动（引鱼 / 喂食）", config.interactive, #selector(toggleInteractive)))
         let fpsOptions: [(String, Any, Bool)] = [("60 帧", 60, config.fps == 60), ("30 帧（更省电）", 30, config.fps == 30)]
         let perf = submenu("性能", fpsOptions, #selector(pickFps))
@@ -429,7 +453,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         p.js("window.pond && pond.feed(\(s.width * CGFloat.random(in: 0.35...0.65)), \(s.height * CGFloat.random(in: 0.35...0.65)))")
     }
 
-    @objc func pickFishCount(_ sender: NSMenuItem) { if let v = sender.representedObject as? Int { config.fishCount = v; commit() } }
+    @objc func pickFishCount(_ sender: NSMenuItem) {
+        guard let v = sender.representedObject as? Int else { return }
+        if isTank { config.tankFishCount = v } else { config.fishCount = v }
+        commit()
+    }
+    @objc func pickScene(_ sender: NSMenuItem) {
+        guard let v = sender.representedObject as? String, v != config.scene else { return }
+        config.scene = v
+        Store.save(config)
+        buildPonds()          // 换一个页面重新加载，加载好后会自动淡入
+    }
     @objc func pickTime(_ sender: NSMenuItem) { if let v = sender.representedObject as? String { config.timeMode = v; commit() } }
     @objc func pickWeather(_ sender: NSMenuItem) {
         if let v = sender.representedObject as? String {
