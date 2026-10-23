@@ -31,6 +31,30 @@ fi
 echo "▸ 本机签名…"
 codesign --force --deep --sign - "$APP" >/dev/null
 
+echo "▸ 编译屏保…"
+SAVER="build/半亩塘.saver"
+mkdir -p "$SAVER/Contents/MacOS" "$SAVER/Contents/Resources/web"
+SFLAGS=(-O -swift-version 5 -emit-library -module-name BanmuSaver -framework Cocoa -framework ScreenSaver -framework WebKit)
+if swiftc "${SFLAGS[@]}" -target arm64-apple-macos12.0 -o build/saver-arm64 mac/ScreenSaver.swift 2>/dev/null \
+  && swiftc "${SFLAGS[@]}" -target x86_64-apple-macos12.0 -o build/saver-x86_64 mac/ScreenSaver.swift 2>/dev/null; then
+  lipo -create build/saver-arm64 build/saver-x86_64 -output "$SAVER/Contents/MacOS/BanmuSaver"
+  SAVER_OK=1
+elif swiftc "${SFLAGS[@]}" -target "$(uname -m)-apple-macos12.0" -o "$SAVER/Contents/MacOS/BanmuSaver" mac/ScreenSaver.swift; then
+  SAVER_OK=1
+else
+  SAVER_OK=0
+  echo "  屏保没编译成功（不影响桌面 App）"
+fi
+rm -f build/saver-*
+if [ "$SAVER_OK" = 1 ]; then
+  cp mac/SaverInfo.plist "$SAVER/Contents/Info.plist"
+  cp web/*.html "$SAVER/Contents/Resources/web/"
+  codesign --force --deep --sign - "$SAVER" >/dev/null
+  echo "  屏保：$(pwd)/$SAVER"
+else
+  rm -rf "$SAVER"
+fi
+
 echo ""
 echo "✓ 完成：$(pwd)/$APP"
 echo "  拖进「应用程序」文件夹后双击打开；设置在菜单栏的小鱼图标里。"

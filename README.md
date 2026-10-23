@@ -54,6 +54,10 @@
 
 ![兰寿品种](docs/ranchu-varieties.png)
 
+## 屏保
+
+`双击安装.command` 会顺带装好屏保。到 **系统设置 → 屏幕保护程序** 选「半亩塘」；点「选项」可以选放兰寿缸还是锦鲤池。屏保里没有鼠标互动，每隔半分钟会自动撒一把鱼食。
+
 ## 建议改一个系统设置
 
 macOS 14 起，点击桌面墙纸默认会把所有窗口推开（「点按墙纸以显示桌面」）。喂鱼时会很烦，建议改成：
@@ -73,6 +77,7 @@ banmu-pond/
 ├── web/aquarium.html     兰寿缸
 └── mac/
     ├── main.swift        Mac 外壳：桌面层窗口、菜单栏、鼠标转发、设置保存
+    ├── ScreenSaver.swift 屏保
     ├── Info.plist
     └── AppIcon.iconset/  应用图标
 ```
