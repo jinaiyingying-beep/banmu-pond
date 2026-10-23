@@ -5,6 +5,10 @@
 import Cocoa
 import ScreenSaver
 import WebKit
+import os
+
+private let saverLog = OSLog(subsystem: "local.banmu.saver", category: "saver")
+private func slog(_ msg: String) { os_log("BanmuSaver: %{public}@", log: saverLog, type: .default, msg) }
 
 @objc(BanmuSaverView)
 final class BanmuSaverView: ScreenSaverView, WKNavigationDelegate {
@@ -25,6 +29,7 @@ final class BanmuSaverView: ScreenSaverView, WKNavigationDelegate {
     }
 
     private func setup() {
+        slog("init preview=\(isPreview) frame=\(NSStringFromRect(frame))")
         animationTimeInterval = 1.0
         wantsLayer = true
         layer?.backgroundColor = NSColor(calibratedRed: 0.18, green: 0.35, blue: 0.34, alpha: 1).cgColor
@@ -41,18 +46,53 @@ final class BanmuSaverView: ScreenSaverView, WKNavigationDelegate {
         web?.removeFromSuperview()
         let bundle = Bundle(for: BanmuSaverView.self)
         let name = scene == "pond" ? "index" : "aquarium"
-        guard let url = bundle.url(forResource: name, withExtension: "html", subdirectory: "web") else { return }
+        guard let url = bundle.url(forResource: name, withExtension: "html", subdirectory: "web"),
+              let html = try? String(contentsOf: url, encoding: .utf8) else {
+            slog("找不到页面 \(name).html，bundle=\(bundle.bundlePath)")
+            return
+        }
         let wv = WKWebView(frame: bounds, configuration: WKWebViewConfiguration())
         wv.autoresizingMask = [.width, .height]
         wv.setValue(false, forKey: "drawsBackground")
         wv.navigationDelegate = self
         addSubview(wv)
-        wv.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        // 屏保在系统沙盒里运行，网页进程不一定能读文件；直接把整页内容交给它，不需要读文件
+        wv.loadHTMLString(html, baseURL: nil)
         web = wv
+        slog("loadHTMLString \(name) \(html.count) chars, bounds=\(NSStringFromRect(bounds))")
+        // 3 秒后自查一次画面有没有在跑
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self, weak wv] in
+            wv?.evaluateJavaScript("document.readyState + ' ' + innerWidth + 'x' + innerHeight + ' fish=' + (typeof fishes !== 'undefined' ? fishes.length : 'none')") { result, error in
+                slog("self-check: \(String(describing: result)) err=\(String(describing: error))")
+                _ = self
+            }
+        }
+    }
+
+    // 网页还没出来之前（或者出不来时）能看到的底色和字样，用来判断屏保本身有没有跑起来
+    override func draw(_ rect: NSRect) {
+        NSColor(calibratedRed: 0.18, green: 0.35, blue: 0.34, alpha: 1).setFill()
+        bounds.fill()
+        let text = "半亩塘" as NSString
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: max(14, bounds.height * 0.04), weight: .light),
+            .foregroundColor: NSColor(white: 1, alpha: 0.6),
+        ]
+        let size = text.size(withAttributes: attrs)
+        text.draw(at: NSPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2), withAttributes: attrs)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        slog("didFail: \(error.localizedDescription)")
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        slog("didFailProvisional: \(error.localizedDescription)")
     }
 
     // 页面加载完：藏起名字、提示和小组件，屏保只留画面
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        slog("didFinish")
         let js = """
         window.pond && pond.setConfig({showTitle:false, showWidget:false});
         ['hint','tag','plaque','journal'].forEach(function(id){var e=document.getElementById(id); if(e) e.style.display='none';});
@@ -61,11 +101,13 @@ final class BanmuSaverView: ScreenSaverView, WKNavigationDelegate {
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        webView.reload()
+        slog("web content process terminated, reloading")
+        loadScene()
     }
 
     override func startAnimation() {
         super.startAnimation()
+        slog("startAnimation")
         feedTimer?.invalidate()
         feedTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             self?.web?.evaluateJavaScript(
@@ -85,6 +127,7 @@ final class BanmuSaverView: ScreenSaverView, WKNavigationDelegate {
     }
 
     @objc private func willStop() {
+        slog("willstop")
         if !isPreview { exit(0) }
     }
 
