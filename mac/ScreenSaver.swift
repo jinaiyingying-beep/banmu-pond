@@ -8,6 +8,18 @@ import WebKit
 import os
 
 private let saverLog = OSLog(subsystem: "local.banmu.saver", category: "saver")
+/// 调用 WebKit 的私有开关（只接受一个 Bool 参数的方法）；不存在就跳过
+private func setPrivateBool(_ obj: NSObject, _ selectorName: String, _ value: Bool) {
+    let sel = NSSelectorFromString(selectorName)
+    guard obj.responds(to: sel), let m = class_getInstanceMethod(type(of: obj), sel) else {
+        slog("没有 \(selectorName)")
+        return
+    }
+    typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+    unsafeBitCast(method_getImplementation(m), to: Setter.self)(obj, sel, value)
+    slog("\(selectorName) \(value)")
+}
+
 private func slog(_ msg: String) { os_log("BanmuSaver: %{public}@", log: saverLog, type: .default, msg) }
 
 @objc(BanmuSaverView)
@@ -51,7 +63,13 @@ final class BanmuSaverView: ScreenSaverView, WKNavigationDelegate {
             slog("找不到页面 \(name).html，bundle=\(bundle.bundlePath)")
             return
         }
-        let wv = WKWebView(frame: bounds, configuration: WKWebViewConfiguration())
+        // 屏保窗口在系统看来常常是「被遮住 / 不可见」的，WebKit 会因此挂起页面、清掉画面 → 黑屏。
+        // 关掉这几项省电机制，让页面一直正常绘制。
+        let cfg = WKWebViewConfiguration()
+        setPrivateBool(cfg.preferences, "_setHiddenPageDOMTimerThrottlingEnabled:", false)
+        setPrivateBool(cfg.preferences, "_setPageVisibilityBasedProcessSuppressionEnabled:", false)
+        let wv = WKWebView(frame: bounds, configuration: cfg)
+        setPrivateBool(wv, "_setWindowOcclusionDetectionEnabled:", false)
         wv.autoresizingMask = [.width, .height]
         wv.setValue(false, forKey: "drawsBackground")
         wv.navigationDelegate = self
