@@ -55,7 +55,7 @@ let config = { name: "兰寿缸", fishCount: 9, showTitle: true, fps: 60, timeMo
 if (!HOST) try { Object.assign(config, JSON.parse(localStorage.getItem("ranchu-tank") || "{}")); } catch (e) {}
 
 const cv = document.getElementById("c"), ctx = cv.getContext("2d");
-let W, H, DPR, S, T = 0;
+let W, H, DPR, SDPR, S, T = 0;
 let tank = {}, backdrop, gravelLayer, hardscape;
 
 /* ============================================================
@@ -414,28 +414,78 @@ class Ranchu {
     this.x = rand(W * 0.12, W * 0.88);
     this.y = rand(tank.level + 80 * S, tank.gravel - 80 * S);
     this.vx = rand(-1, 1) * 20 * S; this.vy = 0;
-    this.face = this.vx >= 0 ? 1 : -1; this.tilt = 0; this.phase = rand(TAU);
+    this.yaw = this.vx >= 0 ? 0 : Math.PI;   // 0 朝右，π 朝左，π/2 正对着你
+    this.face = Math.cos(this.yaw);
+    this.wantYaw = this.yaw; this.turnHold = 0; this.turnCool = 0;
+    this.tilt = 0; this.phase = rand(TAU);
     this.tx = this.x; this.ty = this.y; this.retarget = 0;
     this.blink = rand(2, 6); this.gulp = 0; this.full = 0;
-    this.wen = rand(0.85, 1.08);         // 头瘤大小
+    this.wen = rand(0.85, 1.08);
     this.seed = (Math.random() * 1e9) | 0;
     buildSprite(this);
   }
 }
 
-/* ---------- 形状工具 ---------- */
-function bodyPath(s) {
+/* ============================================================
+   3D 兰寿：把鱼当成一个立体的身体
+   鱼身坐标：X 朝头（-1 尾 ~ 1 头），Y 朝下，Z 朝向观众的那一侧
+   yaw 绕竖直轴转：屏幕 x = X·cos − Z·sin，深度 z = X·sin + Z·cos
+   ============================================================ */
+const BODY_B = 0.95, BODY_C = 0.84;            // 身体半高、半宽（以半身长为 1）
+function proj(X, Y, Z, c, sn) { return [X * c - Z * sn, Y, X * sn + Z * c]; }
+function surfZ(X, Y) { return BODY_C * Math.sqrt(Math.max(0, 1 - X * X - (Y / BODY_B) ** 2)); }
+// 表面一点在当前角度下的「正对程度」：1 = 正对观众，0 = 在轮廓边上
+function facing(X, Y, Z, c, sn) {
+  let nx = X, ny = Y / (BODY_B * BODY_B), nz = Z / (BODY_C * BODY_C);
+  const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+  const px = nx * c - nz * sn, pz = nx * sn + nz * c;
+  return { q: pz / (Math.hypot(px, pz) || 1), depth: pz };
+}
+
+/* ---------- 侧面轮廓（蛋形、背高、尾柄短），按极角重采样，方便与正面圆形插值 ---------- */
+const SIDE_SEGS = [
+  [[1.0, 0.1], [1.0, -0.3], [0.85, -0.62], [0.5, -0.74]],
+  [[0.5, -0.74], [0.22, -0.98], [-0.36, -1.02], [-0.7, -0.74]],
+  [[-0.7, -0.74], [-0.88, -0.57], [-0.97, -0.38], [-1.0, -0.22]],
+  [[-1.0, -0.22], [-1.01, -0.13], [-1.02, -0.04], [-1.03, 0.05]],
+  [[-1.03, 0.05], [-0.95, 0.42], [-0.55, 0.97], [0.0, 0.99]],
+  [[0.0, 0.99], [0.55, 1.0], [0.93, 0.6], [1.0, 0.1]],
+];
+const NPOLY = 96;
+const SIDE_R = (() => {
+  const pts = [];
+  for (const [a, b, c, d] of SIDE_SEGS) for (let i = 0; i < 24; i++) {
+    const t = i / 24, u = 1 - t;
+    const x = u * u * u * a[0] + 3 * u * u * t * b[0] + 3 * u * t * t * c[0] + t * t * t * d[0];
+    const y = u * u * u * a[1] + 3 * u * u * t * b[1] + 3 * u * t * t * c[1] + t * t * t * d[1];
+    pts.push([Math.atan2(y, x), Math.hypot(x, y)]);
+  }
+  pts.sort((p, q) => p[0] - q[0]);
+  const out = new Float32Array(NPOLY);
+  for (let i = 0; i < NPOLY; i++) {
+    const a = -Math.PI + (i / NPOLY) * TAU;
+    let j = pts.findIndex((p) => p[0] >= a); if (j < 0) j = 0;
+    const p1 = pts[j], p0 = pts[(j - 1 + pts.length) % pts.length];
+    let a0 = p0[0], a1 = p1[0]; if (a1 < a0) a1 += TAU; let aa = a; if (aa < a0) aa += TAU;
+    out[i] = lerp(p0[1], p1[1], clamp((aa - a0) / ((a1 - a0) || 1), 0, 1));
+  }
+  return out;
+})();
+function silhouette(s, c, sn) {
   const p = new Path2D();
-  p.moveTo(1.0 * s, 0.1 * s);
-  p.bezierCurveTo(1.0 * s, -0.3 * s, 0.85 * s, -0.62 * s, 0.5 * s, -0.74 * s);
-  p.bezierCurveTo(0.22 * s, -0.98 * s, -0.36 * s, -1.02 * s, -0.7 * s, -0.74 * s);
-  p.bezierCurveTo(-0.88 * s, -0.57 * s, -0.97 * s, -0.38 * s, -1.0 * s, -0.22 * s);
-  p.lineTo(-1.03 * s, 0.05 * s);
-  p.bezierCurveTo(-0.95 * s, 0.42 * s, -0.55 * s, 0.97 * s, 0.0, 0.99 * s);
-  p.bezierCurveTo(0.55 * s, 1.0 * s, 0.93 * s, 0.6 * s, 1.0 * s, 0.1 * s);
+  for (let i = 0; i < NPOLY; i++) {
+    const a = -Math.PI + (i / NPOLY) * TAU, ca = Math.cos(a), sa = Math.sin(a);
+    const sx = SIDE_R[i] * ca, sy = SIDE_R[i] * sa;
+    const fr = 1 / Math.sqrt((ca / BODY_C) ** 2 + (sa / BODY_B) ** 2);
+    const fx = fr * ca, fy = fr * sa + 0.02;
+    const x = Math.sign(ca) * Math.sqrt((sx * c) ** 2 + (fx * sn) ** 2), y = lerp(sy, fy, sn);
+    i ? p.lineTo(x * s, y * s) : p.moveTo(x * s, y * s);
+  }
   p.closePath();
   return p;
 }
+
+/* ---------- 形状工具 ---------- */
 function blobPath(cx, cy, r, R, k = 10, squash = 1) {
   const pts = [];
   for (let i = 0; i < k; i++) { const a = (i / k) * TAU, rr = r * (0.7 + R() * 0.55); pts.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr * squash]); }
@@ -445,247 +495,255 @@ function blobPath(cx, cy, r, R, k = 10, squash = 1) {
   p.closePath();
   return p;
 }
-// 边缘柔和的填充：用阴影模糊做出羽化边
 function softFill(g, path, color, blur) {
+  // 用阴影模糊做出羽化边：把形状移到很远处，再用阴影偏移把模糊的影子放回原位。
+  // 偏移量按当前变换换算，压扁、旋转后也能对准。
+  const m = g.getTransform();
   g.save();
-  g.shadowColor = color; g.shadowBlur = blur * DPR;
-  g.shadowOffsetX = 10000 * DPR; g.shadowOffsetY = 0;
+  g.shadowColor = color; g.shadowBlur = blur * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
+  g.shadowOffsetX = 10000 * m.a; g.shadowOffsetY = 10000 * m.b;
   g.translate(-10000, 0); g.fillStyle = color; g.fill(path);
   g.restore();
 }
 
-/* ---------- 预渲染身体贴图：多层光影，营造立体感 ---------- */
-function buildSprite(f) {
-  const s = f.s, v = f.v, R = seeded(f.seed), r = (a, b) => a + R() * (b - a);
-  const ox = 1.35 * s, oy = 1.2 * s;
-  const c = makeCanvas(2.7 * s * DPR, 2.4 * s * DPR), g = c.getContext("2d");
-  g.scale(DPR, DPR); g.translate(ox, oy);
-  const body = bodyPath(s);
-  const head = v.head || v.body;
-
-  // 1 底色：上深下浅
-  g.save(); g.clip(body);
-  const base = g.createLinearGradient(0, -s, 0, s);
-  base.addColorStop(0, mix(v.body, "#000000", 0.12)); base.addColorStop(0.5, v.body); base.addColorStop(1, v.belly || v.body);
-  g.fillStyle = base; g.fillRect(-1.4 * s, -1.2 * s, 2.8 * s, 2.4 * s);
-
-  // 2 花纹
-  const inBody = (x, y) => (x * x) / 0.9 + (y * y) / 0.8 < 0.85;
+/* ---------- 每条鱼的「表面数据」：花纹、鳞片都定义在立体表面上，两侧各不相同 ---------- */
+function buildSurface(f) {
+  const v = f.v, R = seeded(f.seed), r = (a, b) => a + R() * (b - a);
+  const patches = [], stripes = [];
   for (const p of v.parts || []) {
-    if (p.t === "back" || p.t === "belly") {
-      const path = new Path2D();
-      const yb = p.y * s, sign = p.t === "back" ? -1 : 1;
-      path.moveTo(-1.3 * s, sign * 1.3 * s);
-      for (let x = -1.3; x <= 1.3; x += 0.1) path.lineTo(x * s, yb + Math.sin(x * 5 + R() * 2) * 0.06 * s + (R() - 0.5) * 0.05 * s);
-      path.lineTo(1.3 * s, sign * 1.3 * s); path.closePath();
-      softFill(g, path, p.c, s * 0.08);
-    } else if (p.t === "stripe") {
-      const path = new Path2D();
-      path.moveTo(0.4 * s, -0.72 * s);
-      path.bezierCurveTo(0.1 * s, -0.95 * s, -0.45 * s, -0.95 * s, -0.95 * s, -0.4 * s);
-      path.lineTo(-0.85 * s, -0.05 * s);
-      path.bezierCurveTo(-0.5 * s, -0.4 * s, 0.0, -0.2 * s, 0.35 * s, -0.35 * s);
-      path.closePath();
-      softFill(g, path, p.c, s * 0.06);
+    if (p.t === "spots" || p.t === "blotch") {
+      for (const side of [1, -1]) {
+        for (let i = 0; i < p.n; i++) {
+          let X, Y, tries = 0;
+          do { X = r(-0.95, 0.6); Y = r(-0.9, 0.85); } while (X * X + (Y / BODY_B) ** 2 > 0.82 && ++tries < 30);
+          if (p.at) { X = p.at[0]; Y = p.at[1]; }
+          const Z = side * surfZ(X, Y) * r(0.55, 1);
+          patches.push({ X, Y, Z: Z || side * 0.05, r: r(p.r[0], p.r[1]), c: p.c, small: p.t === "spots", seed: (R() * 1e9) | 0, squash: r(0.7, 1.1) });
+        }
+      }
+      // 背上、肚子下面也补一些，正面转过来时看得到
+      for (let i = 0; i < Math.ceil(p.n / 3); i++) {
+        const X = r(-0.6, 0.5), top = R() < 0.5;
+        patches.push({ X, Y: top ? -0.85 : 0.82, Z: r(-0.2, 0.2), r: r(p.r[0], p.r[1]), c: p.c, small: p.t === "spots", seed: (R() * 1e9) | 0, squash: r(0.7, 1.1) });
+      }
     } else if (p.t === "tiger") {
-      for (let i = 0; i < p.n; i++) {
-        const x = r(-0.95, 0.4) * s, w = r(0.06, 0.13) * s;
-        const path = new Path2D();
-        path.moveTo(x, -1.0 * s);
-        for (let y = -1.0; y <= 1.0; y += 0.2) path.lineTo(x + Math.sin(y * 4 + i) * 0.08 * s + r(-0.04, 0.04) * s, y * s);
-        for (let y = 1.0; y >= -1.0; y -= 0.2) path.lineTo(x + w + Math.sin(y * 4 + i + 1) * 0.08 * s + r(-0.04, 0.04) * s, y * s);
-        path.closePath();
-        softFill(g, path, p.c, s * 0.04);
-      }
-    } else {
-      const n = p.n, small = p.t === "spots";
-      for (let i = 0; i < n; i++) {
-        let x, y, tries = 0;
-        do { x = r(-0.95, 0.55); y = r(-0.9, 0.85); } while (!inBody(x, y) && ++tries < 20);
-        if (p.at) { x = p.at[0]; y = p.at[1]; }
-        const rr = r(p.r[0], p.r[1]) * s;
-        softFill(g, blobPath(x * s, y * s, rr, R, small ? 7 : 11, r(0.7, 1.1)), p.c, small ? s * 0.012 : s * 0.035);
+      for (const side of [1, -1]) for (let i = 0; i < p.n; i++) stripes.push({ X: r(-0.95, 0.45), w: r(0.06, 0.13), side, ph: r(0, TAU), c: p.c });
+    }
+  }
+  const scales = [];
+  const sc = 0.17 * (v.scale || 1);
+  for (const side of [1, -1]) {
+    let row = 0;
+    for (let Y = -0.95; Y < 0.95; Y += sc * 0.6, row++) {
+      for (let X = -1.0 + (row % 2 ? sc * 0.45 : 0); X < 0.42; X += sc * 0.9) {
+        if (X * X + (Y / BODY_B) ** 2 > 0.97) continue;
+        scales.push({ X, Y, Z: side * surfZ(X, Y), shine: r(0.4, 1.2) });
       }
     }
   }
-
-  // 3 头部颜色
-  if (v.headMode === "full") softFill(g, (() => { const p = new Path2D(); p.ellipse(0.72 * s, -0.04 * s, 0.46 * s, 0.78 * s, -0.08, 0, TAU); return p; })(), head, s * 0.07);
-  if (v.headMode === "gill") softFill(g, (() => { const p = new Path2D(); p.ellipse(0.95 * s, 0.0, 0.68 * s, 1.2 * s, 0, 0, TAU); return p; })(), head, s * 0.025);
-
-  // 4 鳞片：一排排向后的弧边，金属品种更亮
-  const sc = s * 0.17 * (v.scale || 1), metal = v.metal ?? 0.25;
-  let row = 0;
-  for (let y = -1.0 * s; y < 1.0 * s; y += sc * 0.6, row++) {
-    for (let x = -1.05 * s + (row % 2 ? sc * 0.45 : 0); x < 0.45 * s; x += sc * 0.9) {
-      const fade = clamp((0.42 * s - x) / (0.3 * s), 0, 1);
-      if (fade <= 0) continue;
-      const shine = (0.04 + metal * 0.2 * r(0.4, 1.2)) * fade;
-      const sg = g.createRadialGradient(x + sc * 0.1, y - sc * 0.15, 0, x, y, sc * 0.55);
-      sg.addColorStop(0, `rgba(255,255,255,${shine})`); sg.addColorStop(1, "rgba(255,255,255,0)");
-      g.fillStyle = sg; g.beginPath(); g.arc(x, y, sc * 0.55, 0, TAU); g.fill();
-      g.strokeStyle = `rgba(0,0,0,${(0.08 + metal * 0.05) * fade})`; g.lineWidth = sc * 0.07;
-      g.beginPath(); g.arc(x, y, sc * 0.52, Math.PI / 2 + 0.35, Math.PI * 1.5 - 0.35); g.stroke();
-      g.strokeStyle = `rgba(255,255,255,${(0.1 + metal * 0.15) * fade})`; g.lineWidth = sc * 0.04;
-      g.beginPath(); g.arc(x + sc * 0.06, y, sc * 0.45, Math.PI / 2 + 0.6, Math.PI * 1.5 - 0.6); g.stroke();
-    }
-  }
-
-  // 5 体积感：边缘暗、上方受光、背上高光、边缘透光
-  const ao = g.createRadialGradient(0.05 * s, -0.3 * s, 0, 0.05 * s, -0.25 * s, 1.35 * s);
-  ao.addColorStop(0, "rgba(0,0,0,0)"); ao.addColorStop(0.55, "rgba(0,0,0,0)"); ao.addColorStop(1, "rgba(10,5,0,0.42)");
-  g.fillStyle = ao; g.fillRect(-1.4 * s, -1.2 * s, 2.8 * s, 2.4 * s);
-  const belly = g.createLinearGradient(0, 0.3 * s, 0, s);
-  belly.addColorStop(0, "rgba(0,0,0,0)"); belly.addColorStop(1, "rgba(20,10,0,0.22)");
-  g.fillStyle = belly; g.fillRect(-1.4 * s, 0, 2.8 * s, 1.2 * s);
-  const top = g.createRadialGradient(-0.1 * s, -0.6 * s, 0, -0.1 * s, -0.6 * s, 0.8 * s);
-  top.addColorStop(0, "rgba(255,255,255,0.32)"); top.addColorStop(1, "rgba(255,255,255,0)");
-  g.fillStyle = top; g.fillRect(-1.4 * s, -1.2 * s, 2.8 * s, 2.4 * s);
-  const spec = new Path2D(); spec.ellipse(-0.18 * s, -0.78 * s, 0.34 * s, 0.07 * s, -0.12, 0, TAU);
-  softFill(g, spec, "rgba(255,255,255,0.55)", s * 0.06);
-  g.strokeStyle = "rgba(255,255,255,0.22)"; g.lineWidth = 0.07 * s; g.stroke(body);
-  g.restore();
-
-  // 6 头瘤：几大团软软鼓起的肉，盖住头顶、腮和鳃盖
-  const k = f.wen;
-  const lobes = [
-    { n: "gill", x: 0.42, y: 0.12, rx: 0.22, ry: 0.36 },
-    { n: "hood", x: 0.5, y: -0.52, rx: 0.36, ry: 0.27 },
-    { n: "hood2", x: 0.74, y: -0.3, rx: 0.25, ry: 0.23 },
-    { n: "chin", x: 0.84, y: 0.44, rx: 0.19, ry: 0.15 },
-    { n: "cheek", x: 0.72, y: 0.17, rx: 0.3, ry: 0.32 },
-    { n: "snout", x: 0.9, y: -0.02, rx: 0.13, ry: 0.16 },
-  ];
-  // 先铺一整块肉瘤底，几团肉在上面鼓起来，就不会像分开的球
-  {
-    const col0 = v.headMode === "cap" ? head : v.headMode ? head : mix(v.body, head, 0.6);
-    const mg = g.createRadialGradient(0.62 * s, -0.25 * s, 0.05 * s, 0.68 * s, 0.0, 0.75 * s * k);
-    mg.addColorStop(0, mix(col0, "#ffffff", 0.14)); mg.addColorStop(0.75, col0); mg.addColorStop(1, mix(col0, "#2a0e00", 0.08));
-    const mass = new Path2D(); mass.ellipse(0.66 * s, -0.04 * s, 0.4 * s * k, 0.66 * s * k, -0.1, 0, TAU);
-    g.save(); g.clip(body); g.fillStyle = mg; g.fill(mass); g.restore();
-  }
-  for (const L of lobes) {
-    const x = (L.x + (L.x - 0.6) * (k - 1) * 0.3) * s, y = (L.y * (0.9 + 0.1 * k)) * s;
-    const rx = L.rx * s * k * r(0.92, 1.08), ry = L.ry * s * k * r(0.92, 1.08);
-    let col = v.headMode === "cap" ? (L.n === "hood" || L.n === "hood2" ? v.cap : head) : v.headMode ? head : mix(v.body, head, 0.6);
-    const lg = g.createRadialGradient(x - rx * 0.35, y - ry * 0.45, Math.min(rx, ry) * 0.1, x, y, Math.max(rx, ry) * 1.05);
-    lg.addColorStop(0, mix(col, "#ffffff", 0.2)); lg.addColorStop(0.65, col); lg.addColorStop(1, rgba(hexOf(mix(col, "#2a0e00", 0.14)), 0));
-    g.fillStyle = lg; g.beginPath(); g.ellipse(x, y, rx * 1.12, ry * 1.12, 0, 0, TAU); g.fill();
-    // 瘤上细小的褶皱
-    g.save(); g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, TAU); g.clip();
-    for (let i = 0; i < 14; i++) {
-      const a = r(0, TAU), d = Math.sqrt(R()) * 0.85, bx = x + Math.cos(a) * rx * d, by = y + Math.sin(a) * ry * d, br = r(0.03, 0.06) * s;
-      g.fillStyle = "rgba(255,255,255,0.10)"; g.beginPath(); g.arc(bx - br * 0.3, by - br * 0.3, br, 0, TAU); g.fill();
-      g.strokeStyle = "rgba(60,20,0,0.07)"; g.lineWidth = br * 0.3; g.beginPath(); g.arc(bx, by, br, 0.3, 2.4); g.stroke();
-    }
-    g.restore();
-  }
-
-  // 7 眼睛：陷在肉瘤之间
-  const ex = 0.7 * s, ey = 0.0, er = 0.078 * s;
-  if (v.eyePatch) softFill(g, blobPath(ex, ey + 0.02 * s, 0.17 * s, R, 9, 0.9), "#1c1c20", s * 0.03);
-  const sock = g.createRadialGradient(ex, ey, er * 0.5, ex, ey, er * 2);
-  sock.addColorStop(0, "rgba(40,10,0,0.45)"); sock.addColorStop(1, "rgba(40,10,0,0)");
-  g.fillStyle = sock; g.beginPath(); g.arc(ex, ey, er * 2, 0, TAU); g.fill();
-  g.fillStyle = "#d9b45a"; g.beginPath(); g.arc(ex, ey, er, 0, TAU); g.fill();
-  g.fillStyle = "#0e0e10"; g.beginPath(); g.arc(ex + er * 0.12, ey + er * 0.05, er * 0.74, 0, TAU); g.fill();
-  g.fillStyle = "rgba(255,255,255,0.95)"; g.beginPath(); g.arc(ex - er * 0.2, ey - er * 0.32, er * 0.28, 0, TAU); g.fill();
-  // 嘴
-  g.fillStyle = v.lips || mix(head, "#3a0a00", 0.35);
-  g.beginPath(); g.ellipse(1.0 * s, 0.26 * s, 0.06 * s, 0.045 * s, 0.3, 0, TAU); g.fill();
-  g.fillStyle = "rgba(30,5,0,0.6)"; g.beginPath(); g.ellipse(1.02 * s, 0.27 * s, 0.025 * s, 0.018 * s, 0.3, 0, TAU); g.fill();
-
-  f.sprite = { c, ox, oy };
-  f.front = buildFront(f);
+  f.surface = { patches, stripes, scales, sc };
 }
 
-/* ---------- 正面像：转身转到一半时，鱼正对着你 ---------- */
-function buildFront(f) {
-  const s = f.s, v = f.v, R = seeded(f.seed + 7), r = (a, b) => a + R() * (b - a);
-  const o = 1.15 * s;
-  const c = makeCanvas(2 * o * DPR, 2 * o * DPR), g = c.getContext("2d");
-  g.scale(DPR, DPR); g.translate(o, o);
+/* ---------- 按角度预渲染身体：0°（侧身）到 90°（正对），共 SPRITE_ANGLES 张 ---------- */
+const SPRITE_ANGLES = 10;
+// 侧身那张立刻画好，其余角度排队在空闲帧里慢慢画，启动和换尺寸都不卡
+const spriteQueue = [];
+function buildSprite(f) {
+  buildSurface(f);
+  f.sprites = new Array(SPRITE_ANGLES).fill(null);
+  f.sprites[0] = renderAngle(f, 0);
+  for (let k = 1; k < SPRITE_ANGLES; k++) spriteQueue.push([f, k, f.sprites]);
+}
+function pumpSprites(budgetMs) {
+  const t0 = performance.now();
+  while (spriteQueue.length && performance.now() - t0 < budgetMs) {
+    const [f, k, arr] = spriteQueue.shift();
+    if (f.sprites !== arr) continue;                 // 这条鱼已经重建过了
+    arr[k] = renderAngle(f, (k / (SPRITE_ANGLES - 1)) * (Math.PI / 2));
+  }
+}
+function spriteFor(f, fi) {
+  let k = Math.round(fi);
+  if (f.sprites[k]) return f.sprites[k];
+  // 还没画好时，先插队画这一张
+  f.sprites[k] = renderAngle(f, (k / (SPRITE_ANGLES - 1)) * (Math.PI / 2));
+  return f.sprites[k];
+}
+
+function renderAngle(f, yaw) {
+  const s = f.s, v = f.v, c = Math.cos(yaw), sn = Math.sin(yaw);
+  const R = seeded(f.seed + 11), r = (a, b) => a + R() * (b - a);
+  const ox = 1.35 * s, oy = 1.2 * s;
+  const cv = makeCanvas(2.7 * s * SDPR, 2.4 * s * SDPR), g = cv.getContext("2d");
+  g.scale(SDPR, SDPR); g.translate(ox, oy);
   const head = v.head || v.body;
-  const body = new Path2D(); body.ellipse(0, 0.04 * s, 0.84 * s, 0.95 * s, 0, 0, TAU);
-  g.save(); g.clip(body);
+  const sil = silhouette(s, c, sn);
+
+  g.save(); g.clip(sil);
+  // 1 底色：上深下浅
   const base = g.createLinearGradient(0, -s, 0, s);
   base.addColorStop(0, mix(v.body, "#000000", 0.12)); base.addColorStop(0.5, v.body); base.addColorStop(1, v.belly || v.body);
-  g.fillStyle = base; g.fillRect(-o, -o, 2 * o, 2 * o);
+  g.fillStyle = base; g.fillRect(-ox, -oy, 2 * ox, 2 * oy);
+
+  // 2 背部 / 腹部 / 背脊的大面积颜色（只和高度有关，不受转身影响）
   for (const p of v.parts || []) {
     if (p.t === "back" || p.t === "belly") {
       const path = new Path2D(), yb = p.y * s, sign = p.t === "back" ? -1 : 1;
-      path.moveTo(-o, sign * o);
-      for (let x = -1.1; x <= 1.1; x += 0.1) path.lineTo(x * s, yb + Math.sin(x * 5) * 0.05 * s);
-      path.lineTo(o, sign * o); path.closePath();
+      path.moveTo(-ox, sign * oy);
+      for (let x = -1.3; x <= 1.3; x += 0.1) path.lineTo(x * s, yb + Math.sin(x * 5 + f.seed) * 0.05 * s);
+      path.lineTo(ox, sign * oy); path.closePath();
       softFill(g, path, p.c, s * 0.08);
     } else if (p.t === "stripe") {
-      const path = new Path2D(); path.ellipse(0, -0.75 * s, 0.32 * s, 0.4 * s, 0, 0, TAU);
-      softFill(g, path, p.c, s * 0.06);
-    } else if (p.t === "tiger") {
-      for (let i = 0; i < Math.ceil(p.n * 0.6); i++) {
-        const x = r(-0.8, 0.7) * s, w = r(0.06, 0.12) * s, path = new Path2D();
-        path.moveTo(x, -s); for (let y = -1; y <= 1; y += 0.2) path.lineTo(x + Math.sin(y * 4 + i) * 0.07 * s, y * s);
-        for (let y = 1; y >= -1; y -= 0.2) path.lineTo(x + w + Math.sin(y * 4 + i + 1) * 0.07 * s, y * s);
-        path.closePath(); softFill(g, path, p.c, s * 0.04);
-      }
-    } else {
-      const small = p.t === "spots", n = Math.ceil(p.n * 0.7);
-      for (let i = 0; i < n; i++) {
-        const a = r(0, TAU), d = Math.sqrt(R()) * 0.8, rr = r(p.r[0], p.r[1]) * s;
-        softFill(g, blobPath(Math.cos(a) * d * 0.84 * s, Math.sin(a) * d * 0.95 * s, rr, R, small ? 7 : 11, r(0.7, 1.1)), p.c, small ? s * 0.012 : s * 0.035);
+      for (let X = -0.92; X <= 0.42; X += 0.07) {
+        const Y = -BODY_B * Math.sqrt(Math.max(0, 1 - X * X)) + 0.16;
+        const [x] = proj(X, Y, 0, c, sn);
+        const e = new Path2D(); e.ellipse(x * s, Y * s, (0.11 + 0.32 * sn) * s, 0.17 * s, 0, 0, TAU);
+        softFill(g, e, p.c, s * 0.05);
       }
     }
   }
-  // 体积感
-  const ao = g.createRadialGradient(-0.1 * s, -0.25 * s, 0, 0, 0, 1.0 * s);
-  ao.addColorStop(0, "rgba(0,0,0,0)"); ao.addColorStop(0.6, "rgba(0,0,0,0)"); ao.addColorStop(1, "rgba(10,5,0,0.45)");
-  g.fillStyle = ao; g.fillRect(-o, -o, 2 * o, 2 * o);
-  const top = g.createRadialGradient(-0.15 * s, -0.6 * s, 0, -0.15 * s, -0.6 * s, 0.7 * s);
+  // 3 虎斑：竖条贴在两侧表面
+  for (const st of f.surface.stripes) {
+    const path = new Path2D(); let first = true, any = false;
+    const edge = (X0, dir) => {
+      for (let Y = dir > 0 ? -1 : 1; dir > 0 ? Y <= 1 : Y >= -1; Y += 0.1 * dir) {
+        const X = X0 + Math.sin(Y * 4 + st.ph) * 0.07;
+        const Z = st.side * surfZ(X, Y);
+        const [x, y, z] = proj(X, Y, Z, c, sn);
+        if (z > -0.05) any = true;
+        first ? path.moveTo(x * s, y * s) : path.lineTo(x * s, y * s); first = false;
+      }
+    };
+    edge(st.X, 1); edge(st.X + st.w, -1); path.closePath();
+    if (any && (st.side > 0 || sn > 0.25)) softFill(g, path, st.c, s * 0.04);
+  }
+  // 4 斑块与小点：投影到屏幕，靠边的会被压扁
+  for (const p of f.surface.patches) {
+    const [x, y, z] = proj(p.X, p.Y, p.Z, c, sn);
+    if (z < 0.02) continue;
+    const { q } = facing(p.X, p.Y, p.Z, c, sn);
+    if (q < 0.06) continue;
+    const PR = seeded(p.seed);
+    g.save(); g.translate(x * s, y * s); g.scale(Math.max(0.12, q), 1);
+    softFill(g, blobPath(0, 0, p.r * s, PR, p.small ? 7 : 11, p.squash), p.c, p.small ? s * 0.012 : s * 0.035);
+    g.restore();
+  }
+  // 5 头部颜色：头这一截（X > 0.3）的投影
+  if (v.headMode === "full" || v.headMode === "gill") {
+    const Xh = v.headMode === "gill" ? 0.26 : 0.32;
+    const cx = ((1 + Xh) / 2) * c, rx = lerp((1 - Xh) / 2 + 0.1, BODY_C * Math.sqrt(1 - Xh * Xh) * 1.02, sn);
+    const e = new Path2D(); e.ellipse(cx * s, -0.03 * s, rx * s, (v.headMode === "gill" ? 1.0 : 0.8) * s, 0, 0, TAU);
+    softFill(g, e, head, v.headMode === "gill" ? s * 0.025 : s * 0.07);
+  }
+  // 6 鳞片
+  const sc = f.surface.sc * s, metal = v.metal ?? 0.25;
+  const tailLeft = c >= 0;
+  for (const sc3 of f.surface.scales) {
+    const [x, y, z] = proj(sc3.X, sc3.Y, sc3.Z, c, sn);
+    if (z < 0.03) continue;
+    const { q } = facing(sc3.X, sc3.Y, sc3.Z, c, sn);
+    if (q < 0.12) continue;
+    const fade = clamp((0.42 - sc3.X) / 0.3, 0, 1) * clamp(q * 1.6, 0, 1);
+    if (fade <= 0.02) continue;
+    g.save(); g.translate(x * s, y * s); g.scale(q, 1);
+    const shine = (0.04 + metal * 0.2 * sc3.shine) * fade;
+    const sg = g.createRadialGradient(sc * 0.1, -sc * 0.15, 0, 0, 0, sc * 0.55);
+    sg.addColorStop(0, `rgba(255,255,255,${shine})`); sg.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = sg; g.beginPath(); g.arc(0, 0, sc * 0.55, 0, TAU); g.fill();
+    const a0 = tailLeft ? Math.PI / 2 + 0.35 : -Math.PI / 2 + 0.35, a1 = tailLeft ? Math.PI * 1.5 - 0.35 : Math.PI / 2 - 0.35;
+    g.strokeStyle = `rgba(0,0,0,${(0.08 + metal * 0.05) * fade})`; g.lineWidth = sc * 0.07;
+    g.beginPath(); g.arc(0, 0, sc * 0.52, a0, a1); g.stroke();
+    g.strokeStyle = `rgba(255,255,255,${(0.1 + metal * 0.15) * fade})`; g.lineWidth = sc * 0.04;
+    g.beginPath(); g.arc(tailLeft ? sc * 0.06 : -sc * 0.06, 0, sc * 0.45, a0 + 0.25, a1 - 0.25); g.stroke();
+    g.restore();
+  }
+  // 7 体积感：边缘暗、上方受光、背上高光、轮廓透光
+  const ao = g.createRadialGradient(0.04 * s * c, -0.28 * s, 0, 0.04 * s * c, -0.22 * s, 1.3 * s * lerp(1, 0.86, sn));
+  ao.addColorStop(0, "rgba(0,0,0,0)"); ao.addColorStop(0.55, "rgba(0,0,0,0)"); ao.addColorStop(1, "rgba(10,5,0,0.44)");
+  g.fillStyle = ao; g.fillRect(-ox, -oy, 2 * ox, 2 * oy);
+  const bl = g.createLinearGradient(0, 0.3 * s, 0, s);
+  bl.addColorStop(0, "rgba(0,0,0,0)"); bl.addColorStop(1, "rgba(20,10,0,0.22)");
+  g.fillStyle = bl; g.fillRect(-ox, 0, 2 * ox, oy);
+  const top = g.createRadialGradient(-0.1 * s * c, -0.6 * s, 0, -0.1 * s * c, -0.6 * s, 0.8 * s);
   top.addColorStop(0, "rgba(255,255,255,0.3)"); top.addColorStop(1, "rgba(255,255,255,0)");
-  g.fillStyle = top; g.fillRect(-o, -o, 2 * o, 2 * o);
-  g.strokeStyle = "rgba(255,255,255,0.2)"; g.lineWidth = 0.07 * s; g.stroke(body);
+  g.fillStyle = top; g.fillRect(-ox, -oy, 2 * ox, 2 * oy);
+  const spec = new Path2D(); spec.ellipse(-0.18 * s * c, -0.78 * s, 0.34 * s * lerp(1, 0.7, sn), 0.07 * s, -0.12 * c, 0, TAU);
+  softFill(g, spec, "rgba(255,255,255,0.55)", s * 0.06);
+  g.strokeStyle = "rgba(255,255,255,0.2)"; g.lineWidth = 0.07 * s; g.stroke(sil);
   g.restore();
 
-  // 头瘤：正面看是一大团，两边腮帮鼓起
+  // 8 头瘤：一整块肉底 + 几团鼓起的肉，都按立体位置投影、由远到近画
   const k = f.wen;
-  const col0 = v.headMode === "cap" ? head : v.headMode ? head : mix(v.body, head, 0.6);
-  const mass = new Path2D(); mass.ellipse(0, -0.1 * s, 0.66 * s * k, 0.6 * s * k, 0, 0, TAU);
-  const mg = g.createRadialGradient(-0.1 * s, -0.35 * s, 0.05 * s, 0, -0.1 * s, 0.7 * s * k);
-  mg.addColorStop(0, mix(col0, "#ffffff", 0.14)); mg.addColorStop(0.75, col0); mg.addColorStop(1, mix(col0, "#2a0e00", 0.08));
-  g.save(); g.clip(body); g.fillStyle = mg; g.fill(mass); g.restore();
-  const lobes = [
-    { n: "cheek", x: -0.42, y: 0.12, rx: 0.28, ry: 0.32 }, { n: "cheek", x: 0.42, y: 0.12, rx: 0.28, ry: 0.32 },
-    { n: "hood2", x: -0.34, y: -0.4, rx: 0.26, ry: 0.24 }, { n: "hood2", x: 0.34, y: -0.4, rx: 0.26, ry: 0.24 },
-    { n: "hood", x: 0, y: -0.56, rx: 0.4, ry: 0.25 },
-    { n: "chin", x: 0, y: 0.34, rx: 0.22, ry: 0.14 }, { n: "snout", x: 0, y: -0.06, rx: 0.2, ry: 0.2 },
+  const col0 = v.headMode ? head : mix(v.body, head, 0.6);
+  {
+    const [mx] = proj(0.66, -0.04, 0, c, sn);
+    const rx = Math.hypot(0.4 * c, 0.62 * sn) * k;
+    const mg = g.createRadialGradient(mx * s - 0.05 * s, -0.25 * s, 0.05 * s, mx * s, 0, 0.75 * s * k);
+    mg.addColorStop(0, mix(col0, "#ffffff", 0.14)); mg.addColorStop(0.75, col0); mg.addColorStop(1, mix(col0, "#2a0e00", 0.08));
+    const mass = new Path2D(); mass.ellipse(mx * s, -0.06 * s, rx * s, 0.64 * s * k, 0, 0, TAU);
+    g.save(); g.clip(sil); g.fillStyle = mg; g.fill(mass); g.restore();
+  }
+  const LOBES = [
+    ["gill", 0.42, 0.12, 0.6, 0.22, 0.36], ["gill", 0.42, 0.12, -0.6, 0.22, 0.36],
+    ["hood", 0.5, -0.55, 0, 0.36, 0.27],
+    ["hood2", 0.74, -0.32, 0.28, 0.25, 0.23], ["hood2", 0.74, -0.32, -0.28, 0.25, 0.23],
+    ["cheek", 0.7, 0.16, 0.42, 0.29, 0.32], ["cheek", 0.7, 0.16, -0.42, 0.29, 0.32],
+    ["chin", 0.86, 0.42, 0, 0.2, 0.14], ["snout", 0.95, -0.03, 0, 0.15, 0.17],
   ];
+  const lobes = LOBES.map(([n, X, Y, Z, rx, ry]) => { const [x, y, z] = proj(X, Y, Z, c, sn); return { n, x, y, z, rx, ry }; })
+    .filter((L) => L.z > -0.28).sort((a, b) => a.z - b.z);
   for (const L of lobes) {
-    const x = L.x * s * k, y = L.y * s * (0.9 + 0.1 * k), rx = L.rx * s * k, ry = L.ry * s * k;
+    const x = (L.x + (L.x - 0.6 * c) * (k - 1) * 0.3) * s, y = L.y * (0.9 + 0.1 * k) * s;
+    const rx = L.rx * s * k * r(0.94, 1.06), ry = L.ry * s * k * r(0.94, 1.06);
     const col = v.headMode === "cap" ? (L.n === "hood" || L.n === "hood2" ? v.cap : head) : col0;
     const lg = g.createRadialGradient(x - rx * 0.35, y - ry * 0.45, Math.min(rx, ry) * 0.1, x, y, Math.max(rx, ry) * 1.05);
     lg.addColorStop(0, mix(col, "#ffffff", 0.2)); lg.addColorStop(0.65, col); lg.addColorStop(1, rgba(hexOf(mix(col, "#2a0e00", 0.14)), 0));
     g.fillStyle = lg; g.beginPath(); g.ellipse(x, y, rx * 1.12, ry * 1.12, 0, 0, TAU); g.fill();
+    g.save(); g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, TAU); g.clip();
+    for (let i = 0; i < 12; i++) {
+      const a = r(0, TAU), d = Math.sqrt(R()) * 0.85, bx = x + Math.cos(a) * rx * d, by = y + Math.sin(a) * ry * d, br = r(0.03, 0.06) * s;
+      g.fillStyle = "rgba(255,255,255,0.1)"; g.beginPath(); g.arc(bx - br * 0.3, by - br * 0.3, br, 0, TAU); g.fill();
+      g.strokeStyle = "rgba(60,20,0,0.07)"; g.lineWidth = br * 0.3; g.beginPath(); g.arc(bx, by, br, 0.3, 2.4); g.stroke();
+    }
+    g.restore();
   }
-  // 两只眼睛
-  for (const side of [-1, 1]) {
-    const ex = side * 0.46 * s, ey = -0.04 * s, er = 0.07 * s;
-    if (v.eyePatch) softFill(g, blobPath(ex, ey, 0.16 * s, R, 9, 0.9), "#1c1c20", s * 0.03);
-    const sock = g.createRadialGradient(ex, ey, er * 0.5, ex, ey, er * 2);
+  // 9 眼睛（两只，按角度显隐、压扁）
+  for (const side of [1, -1]) {
+    const E = eyeAt(side, c, sn);
+    if (!E) continue;
+    const er = 0.075 * s, ex = E.x * s, ey = E.y * s;
+    if (v.eyePatch) { g.save(); g.translate(ex, ey); g.scale(Math.max(0.3, E.q), 1); softFill(g, blobPath(0, 0.02 * s, 0.17 * s, seeded(f.seed + side), 9, 0.9), "#1c1c20", s * 0.03); g.restore(); }
+    g.save(); g.translate(ex, ey); g.scale(E.q, 1);
+    const sock = g.createRadialGradient(0, 0, er * 0.5, 0, 0, er * 2);
     sock.addColorStop(0, "rgba(40,10,0,0.45)"); sock.addColorStop(1, "rgba(40,10,0,0)");
-    g.fillStyle = sock; g.beginPath(); g.arc(ex, ey, er * 2, 0, TAU); g.fill();
-    g.fillStyle = "#d9b45a"; g.beginPath(); g.ellipse(ex, ey, er * 0.75, er, 0, 0, TAU); g.fill();
-    g.fillStyle = "#0e0e10"; g.beginPath(); g.ellipse(ex + side * er * 0.12, ey, er * 0.55, er * 0.75, 0, 0, TAU); g.fill();
-    g.fillStyle = "rgba(255,255,255,0.95)"; g.beginPath(); g.arc(ex - er * 0.2, ey - er * 0.35, er * 0.24, 0, TAU); g.fill();
+    g.fillStyle = sock; g.beginPath(); g.arc(0, 0, er * 2, 0, TAU); g.fill();
+    g.fillStyle = "#d9b45a"; g.beginPath(); g.arc(0, 0, er, 0, TAU); g.fill();
+    g.fillStyle = "#0e0e10"; g.beginPath(); g.arc(er * 0.1, er * 0.05, er * 0.74, 0, TAU); g.fill();
+    g.restore();
+    g.fillStyle = "rgba(255,255,255,0.95)"; g.beginPath(); g.arc(ex - er * 0.2 * E.q, ey - er * 0.32, er * 0.27, 0, TAU); g.fill();
   }
-  // 嘴：正面看是一个小圆口
-  g.fillStyle = v.lips || mix(head, "#3a0a00", 0.35);
-  g.beginPath(); g.ellipse(0, 0.2 * s, 0.085 * s, 0.065 * s, 0, 0, TAU); g.fill();
-  g.fillStyle = "rgba(30,5,0,0.7)"; g.beginPath(); g.ellipse(0, 0.21 * s, 0.04 * s, 0.03 * s, 0, 0, TAU); g.fill();
-  return { c, o };
+  // 10 嘴：侧面在鼻尖，正面是一个小圆口
+  {
+    const [x, y] = proj(1.0, 0.26, 0, c, sn), w = lerp(0.045, 0.085, sn);
+    g.fillStyle = v.lips || mix(head, "#3a0a00", 0.35);
+    g.beginPath(); g.ellipse(x * s, y * s, w * s, 0.055 * s, 0.3 * c, 0, TAU); g.fill();
+    g.fillStyle = "rgba(30,5,0,0.6)"; g.beginPath(); g.ellipse((x + 0.01 * c) * s, (y + 0.01) * s, w * 0.45 * s, 0.022 * s, 0.3 * c, 0, TAU); g.fill();
+  }
+  return { c: cv, ox, oy };
+}
+function eyeAt(side, c, sn) {
+  const X = 0.7, Y = 0.0, Z = side * 0.44;
+  const [x, y, z] = proj(X, Y, Z, c, sn);
+  const nx = 0.55, nz = side * 0.83;
+  const px = nx * c - nz * sn, pz = nx * sn + nz * c;
+  const q = pz / (Math.hypot(px, pz) || 1);
+  if (z < 0 || q < 0.12) return null;
+  return { x, y, q };
 }
 
 /* ---------- 鳍：半透明，根部浓、末端淡，带鳍条 ---------- */
 function drawFin(g, len, wid, color, rays, wave, alpha) {
+  if (len < 1) return;
   const path = new Path2D();
   path.moveTo(0, -wid * 0.22);
   path.bezierCurveTo(len * 0.4, -wid * 0.95, len * 0.88, -wid * 0.7 + wave, len, wave * 0.6);
@@ -703,59 +761,72 @@ function drawFin(g, len, wid, color, rays, wave, alpha) {
   g.strokeStyle = `rgba(255,255,255,${0.25 * alpha})`; g.lineWidth = 0.8; g.stroke(path);
 }
 
+// 立体的鳍：根部位置 + 伸出方向都在鱼身坐标里，按当前角度投影，近大远小
+function fin3d(g, s, c, sn, bx, by, bz, dx, dy, dz, len, wid, color, rays, wave, alpha) {
+  const [x0, y0] = proj(bx, by, bz, c, sn), [x1, y1] = proj(bx + dx * len, by + dy * len, bz + dz * len, c, sn);
+  const L = Math.hypot(x1 - x0, y1 - y0);
+  const fore = L / len;                                         // 越侧对，越短
+  g.save(); g.translate(x0 * s, y0 * s); g.rotate(Math.atan2(y1 - y0, x1 - x0));
+  drawFin(g, L * s, wid * s * (0.45 + 0.55 * Math.max(fore, 0.3)), color, rays, wave * fore, alpha);
+  g.restore();
+}
+
 function drawRanchu(f, g) {
-  const k = 0.86 + 0.2 * (1 - f.z), s = f.s, v = f.v;
-  // 转身：侧面最多压到 0.6 倍宽（兰寿是圆的），转到一半淡入正面像
-  const af = Math.abs(f.face), dir = f.face < 0 ? -1 : 1;
-  const fx = dir * lerp(0.6, 1, smooth(af));
-  const turn = 1 - smooth(clamp((af - 0.08) / 0.72, 0, 1));
+  const kz = 0.86 + 0.2 * (1 - f.z), s = f.s, v = f.v;
+  // 把 0~π 的朝向折成 0~π/2 的贴图角度，超过 π/2 就左右镜像
+  const yaw = f.yaw, mirror = yaw > Math.PI / 2, a = mirror ? Math.PI - yaw : yaw;
+  const c = Math.cos(a), sn = Math.sin(a);
+  const fi = (a / (Math.PI / 2)) * (SPRITE_ANGLES - 1);
   const roll = Math.sin(f.phase * 0.5) * 0.035;
   const baseA = 0.86 + 0.14 * (1 - f.z);
   const rays = v.rays || "rgba(255,255,255,0.4)";
-  const wag = Math.sin(f.phase) * 0.28, wave = Math.sin(f.phase - 1.2) * s * 0.1;
-  const frontA = smooth(clamp((turn - 0.12) / 0.38, 0, 1));   // 正面像：先垫在后面，很快变实
-  const sideA = 1 - smooth(clamp((turn - 0.4) / 0.45, 0, 1)); // 侧面像：在前面慢慢淡出
-  // 正面像（转身中间）
-  if (frontA > 0.01 && f.front) {
-    g.save();
-    g.translate(f.x, f.y); g.rotate(roll); g.scale(k, k);
-    g.globalAlpha = baseA * frontA;
-    const flap = Math.sin(f.phase * 0.9) * 0.25;
-    for (const side of [-1, 1]) { // 两侧张开的胸鳍、腹鳍
-      g.save(); g.translate(side * 0.66 * s, 0.45 * s); g.scale(side, 1); g.rotate(0.55 + flap); drawFin(g, 0.42 * s, 0.24 * s, v.fin, rays, 0, 0.85); g.restore();
-      g.save(); g.translate(side * 0.2 * s, 0.86 * s); g.scale(side, 1); g.rotate(1.25 - flap * 0.5); drawFin(g, 0.34 * s, 0.2 * s, v.fin, rays, 0, 0.8); g.restore();
-    }
-    g.drawImage(f.front.c, -f.front.o, -f.front.o, f.front.c.width / DPR, f.front.c.height / DPR);
-    if (f.blink < 0) for (const side of [-1, 1]) { g.fillStyle = mix(v.headMode ? v.head : v.body, "#000000", 0.15); g.beginPath(); g.ellipse(side * 0.46 * s, -0.04 * s, 0.075 * s, 0.08 * s, 0, 0, TAU); g.fill(); }
-    g.restore();
-  }
-  if (sideA <= 0.01) return;
+  const swing = Math.sin(f.phase) * 0.42;                // 尾巴左右摆（朝向观众 / 背离观众）
+  const wave = Math.sin(f.phase - 1.2) * 0.08;
+  const flap = Math.sin(f.phase * 0.9) * 0.3;
+
   g.save();
   g.translate(f.x, f.y);
-  g.rotate((dir < 0 ? -f.tilt : f.tilt) * (1 - turn) + roll);
-  g.scale(fx * k, k);
-  g.globalAlpha = baseA * sideA;
+  g.rotate(f.tilt * c * (mirror ? -1 : 1) + roll);
+  g.scale((mirror ? -1 : 1) * kz, kz);
+  g.globalAlpha = baseA;
 
-  // 远侧：尾、腹鳍
-  g.save(); g.translate(-0.98 * s, -0.18 * s); g.rotate(Math.PI - 0.75 + wag * 0.8); drawFin(g, 0.8 * s, 0.42 * s, v.fin, rays, wave, 0.55); g.restore();
-  g.save(); g.translate(-0.98 * s, -0.08 * s); g.rotate(Math.PI - 0.1 + wag * 0.8); drawFin(g, 0.72 * s, 0.38 * s, v.fin, rays, -wave, 0.55); g.restore();
-  g.save(); g.translate(0.05 * s, 0.88 * s); g.rotate(1.75 + Math.sin(f.phase * 0.8) * 0.2); drawFin(g, 0.34 * s, 0.2 * s, v.fin, rays, 0, 0.5); g.restore();
+  // 鳍：方向向量（鱼身坐标）
+  const sw = Math.sin(swing), cw = Math.cos(swing);
+  const rotY = (dx, dz) => [dx * cw - dz * sw, dx * sw + dz * cw];
+  const fins = [];
+  for (const side of [1, -1]) {
+    const [tx1, tz1] = rotY(-0.82, side * 0.3), [tx2, tz2] = rotY(-0.95, side * 0.32);
+    fins.push({ b: [-0.97, -0.15, side * 0.05], d: [tx1, -0.5, tz1], len: 0.92, wid: 0.46, a: 0.9, wave });
+    fins.push({ b: [-0.97, -0.05, side * 0.05], d: [tx2, 0.12, tz2], len: 0.84, wid: 0.42, a: 0.9, wave: -wave });
+    fins.push({ b: [0.42, 0.56, side * 0.52], d: [-0.5, 0.7, side * (0.5 + flap * 0.4)], len: 0.44, wid: 0.24, a: 0.85, wave: 0 });
+    fins.push({ b: [0.0, 0.9, side * 0.2], d: [-0.45, 0.88, side * 0.2], len: 0.38, wid: 0.22, a: 0.85, wave: 0 });
+  }
+  fins.push({ b: [-0.68, 0.68, 0], d: [-0.6, 0.8, 0], len: 0.27, wid: 0.16, a: 0.8, wave: 0 });
+  for (const F of fins) F.z = proj(F.b[0] + F.d[0] * F.len * 0.5, F.b[1], F.b[2] + F.d[2] * F.len * 0.5, c, sn)[2];
+  fins.sort((p, q) => p.z - q.z);
+  const drawF = (F) => {
+    const l = Math.hypot(...F.d); const d = F.d.map((x) => x / l);
+    g.globalAlpha = baseA * (F.z < 0 ? 0.65 : 1);
+    fin3d(g, s, c, sn, F.b[0], F.b[1], F.b[2], d[0], d[1], d[2], F.len, F.wid, v.fin, rays, F.wave * s, F.a);
+  };
+  for (const F of fins) if (F.z < 0.05) drawF(F);
 
-  g.globalAlpha = baseA * sideA;
-  g.drawImage(f.sprite.c, -f.sprite.ox, -f.sprite.oy, f.sprite.c.width / DPR, f.sprite.c.height / DPR);
-  if (f.blink < 0) { g.fillStyle = mix(v.headMode ? v.head : v.body, "#000000", 0.15); g.beginPath(); g.ellipse(0.7 * s, 0, 0.08 * s, 0.075 * s, 0, 0, TAU); g.fill(); }
-  if (f.gulp > 0) { const o = Math.abs(Math.sin(f.gulp * 18)); g.fillStyle = "rgba(30,5,0,0.85)"; g.beginPath(); g.ellipse(1.02 * s, 0.27 * s, 0.04 * s, 0.02 * s + 0.05 * s * o, 0.3, 0, TAU); g.fill(); }
-
-  // 近侧：胸鳍、腹鳍、臀鳍、尾（尾巴在转身时藏到身后）
-  g.globalAlpha = baseA * sideA;
-  g.save(); g.translate(0.4 * s, 0.55 * s); g.rotate(2.0 + Math.sin(f.phase * 0.9) * 0.3); drawFin(g, 0.42 * s, 0.24 * s, v.fin, rays, 0, 0.85); g.restore();
-  g.save(); g.translate(-0.05 * s, 0.92 * s); g.rotate(1.7 + Math.sin(f.phase * 0.8 + 1) * 0.2); drawFin(g, 0.38 * s, 0.22 * s, v.fin, rays, 0, 0.85); g.restore();
-  g.save(); g.translate(-0.68 * s, 0.68 * s); g.rotate(2.15 + Math.sin(f.phase + 2) * 0.15); drawFin(g, 0.26 * s, 0.16 * s, v.fin, rays, 0, 0.8); g.restore();
-  g.globalAlpha = baseA * sideA;
-  g.save(); g.translate(-0.98 * s, -0.14 * s); g.rotate(Math.PI - 0.55 + wag); drawFin(g, 0.9 * s, 0.46 * s, v.fin, rays, wave, 0.9); g.restore();
-  g.save(); g.translate(-0.98 * s, -0.04 * s); g.rotate(Math.PI + 0.05 + wag); drawFin(g, 0.82 * s, 0.42 * s, v.fin, rays, -wave, 0.9); g.restore();
+  // 身体：取最接近当前角度的那一张（每 10° 一张，转得快就像逐帧动画）
+  g.globalAlpha = baseA;
+  const A = spriteFor(f, fi);
+  g.drawImage(A.c, -A.ox, -A.oy, A.c.width / SDPR, A.c.height / SDPR);
+  // 眨眼、张嘴
+  if (f.blink < 0) for (const side of [1, -1]) {
+    const E = eyeAt(side, c, sn); if (!E) continue;
+    g.save(); g.translate(E.x * s, E.y * s); g.scale(E.q, 1);
+    g.fillStyle = mix(v.headMode ? v.head : v.body, "#000000", 0.15); g.beginPath(); g.ellipse(0, 0, 0.085 * s, 0.08 * s, 0, 0, TAU); g.fill(); g.restore();
+  }
+  if (f.gulp > 0) {
+    const o = Math.abs(Math.sin(f.gulp * 18)), [x, y] = proj(1.0, 0.27, 0, c, sn);
+    g.fillStyle = "rgba(30,5,0,0.85)"; g.beginPath(); g.ellipse(x * s, y * s, lerp(0.035, 0.06, sn) * s, (0.02 + 0.05 * o) * s, 0, 0, TAU); g.fill();
+  }
+  for (const F of fins) if (F.z >= 0.05) drawF(F);
   g.restore();
-
 }
 
 // 鼠标停在鱼身上时，显示品种名
@@ -841,10 +912,19 @@ function updateFish(f, dt) {
   const nb = fishBounds(f, f.y);
   f.y = clamp(f.y, nb.top, nb.bot); f.x = clamp(f.x, nb.l, nb.r);
   // 转身：朝向在 -1..1 之间过渡，看起来像在水里转了个身
-  const wantFace = Math.abs(f.vx) > 4 * S ? Math.sign(f.vx) : f.face >= 0 ? 1 : -1;
-  // 转身放慢，转到正面时稍作停顿
-  const turnRate = Math.abs(f.face) < 0.25 ? 1.1 : 2.0;
-  f.face = clamp(f.face + clamp(wantFace - f.face, -dt * turnRate, dt * turnRate), -1, 1);
+  // 转身：方向持续反了一小会儿才转，转完有冷却，避免原地来回掉头
+  f.turnCool = Math.max(0, f.turnCool - dt);
+  const wantRight = f.vx > 0, nowRight = f.wantYaw < Math.PI / 2;
+  if (Math.abs(f.vx) > 9 * S && wantRight !== nowRight) {
+    f.turnHold += dt;
+    if (f.turnHold > 0.3 && f.turnCool <= 0) { f.wantYaw = wantRight ? 0 : Math.PI; f.turnHold = 0; f.turnCool = 1.4; }
+  } else f.turnHold = 0;
+  // 还没转过来时，金鱼是用胸鳍慢慢倒退的
+  if (wantRight !== nowRight) f.vx *= Math.exp(-dt * 3);
+  // 像弹簧一样快速一拧，约 0.6 秒
+  f.yawV = (f.yawV || 0) + ((f.wantYaw - f.yaw) * 70 - (f.yawV || 0) * 15) * dt;
+  f.yaw = clamp(f.yaw + f.yawV * dt, 0, Math.PI);
+  f.face = Math.cos(f.yaw);
   let tilt = Math.atan2(f.vy, Math.abs(f.vx) + 15 * S) * 0.8;
   if (mode === "food" && best && best.state === "float" && Math.abs(f.x + f.face * f.s - best.x) < f.s * 2) tilt = -0.55;
   f.tilt = lerp(f.tilt, clamp(tilt, -0.6, 0.45), 1 - Math.exp(-dt * 3));
@@ -975,6 +1055,7 @@ function frame(now) {
 function step(dt) {
   dayLight = lerp(dayLight, computeLight(), 1 - Math.exp(-dt * 2));
   updateWaves(dt);
+  pumpSprites(4);
   for (const f of fishes) updateFish(f, dt);
   const g = ctx;
   g.setTransform(DPR, 0, 0, DPR, 0, 0); g.globalCompositeOperation = "source-over"; g.globalAlpha = 1;
@@ -1040,6 +1121,7 @@ window.pond = {
 function resize() {
   W = innerWidth; H = innerHeight;
   DPR = Math.min(window.devicePixelRatio || 1, config.quality === "saver" ? 1 : 2);
+  SDPR = Math.min(DPR, 1.6);           // 鱼身贴图的像素比
   S = clamp(Math.min(W, H) / 900, 0.55, 1.6);
   cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
   computeTank();
