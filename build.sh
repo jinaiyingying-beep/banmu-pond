@@ -34,4 +34,4 @@ codesign --force --deep --sign - "$APP" >/dev/null
 echo ""
 echo "✓ 完成：$(pwd)/$APP"
 echo "  拖进「应用程序」文件夹后双击打开；设置在菜单栏的小鱼图标里。"
-open build
+# open build
