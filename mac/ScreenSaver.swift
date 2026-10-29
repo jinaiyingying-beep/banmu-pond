@@ -57,7 +57,7 @@ final class BanmuSaverView: ScreenSaverView, WKNavigationDelegate {
     private func loadScene() {
         web?.removeFromSuperview()
         let bundle = Bundle(for: BanmuSaverView.self)
-        let name = scene == "pond" ? "index" : "aquarium"
+        let name = scene == "pond" ? "index" : scene == "lagoon" ? "lagoon" : "aquarium"
         guard let url = bundle.url(forResource: name, withExtension: "html", subdirectory: "web"),
               let html = try? String(contentsOf: url, encoding: .utf8) else {
             slog("找不到页面 \(name).html，bundle=\(bundle.bundlePath)")
@@ -113,7 +113,7 @@ final class BanmuSaverView: ScreenSaverView, WKNavigationDelegate {
         slog("didFinish")
         let js = """
         window.pond && pond.setConfig({showTitle:false, showWidget:false});
-        ['hint','tag','plaque','journal'].forEach(function(id){var e=document.getElementById(id); if(e) e.style.display='none';});
+        ['hint','tag','plaque','journal','dock','tuneBtn','panel','intro','titleBox','credit'].forEach(function(id){var e=document.getElementById(id); if(e) e.style.display='none';});
         """
         webView.evaluateJavaScript(js, completionHandler: nil)
     }
@@ -159,8 +159,8 @@ final class BanmuSaverView: ScreenSaverView, WKNavigationDelegate {
         let label = NSTextField(labelWithString: "屏保里放哪个场景：")
         label.frame = NSRect(x: 20, y: 88, width: 280, height: 20)
         let pop = NSPopUpButton(frame: NSRect(x: 18, y: 54, width: 284, height: 28), pullsDown: false)
-        pop.addItems(withTitles: ["兰寿缸（正视）", "锦鲤池（俯视）"])
-        pop.selectItem(at: scene == "pond" ? 1 : 0)
+        pop.addItems(withTitles: ["兰寿缸（正视）", "锦鲤池（俯视）", "浅湾（俯瞰泻湖）"])
+        pop.selectItem(at: scene == "pond" ? 1 : scene == "lagoon" ? 2 : 0)
         let ok = NSButton(title: "好", target: self, action: #selector(closeSheet))
         ok.frame = NSRect(x: 220, y: 12, width: 82, height: 32)
         ok.bezelStyle = .rounded
@@ -175,7 +175,8 @@ final class BanmuSaverView: ScreenSaverView, WKNavigationDelegate {
 
     @objc private func closeSheet() {
         if let p = popup {
-            prefs?.set(p.indexOfSelectedItem == 1 ? "pond" : "aquarium", forKey: "scene")
+            let scenes = ["aquarium", "pond", "lagoon"]
+            prefs?.set(scenes[max(0, min(2, p.indexOfSelectedItem))], forKey: "scene")
             prefs?.synchronize()
         }
         if let s = sheet {

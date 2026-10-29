@@ -192,9 +192,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: 窗口管理
 
     var isTank: Bool { config.scene == "aquarium" }
+    var isLagoon: Bool { config.scene == "lagoon" }
 
     func sceneURL() -> URL? {
-        let name = isTank ? "aquarium" : "index"
+        let name = isTank ? "aquarium" : isLagoon ? "lagoon" : "index"
         return Bundle.main.url(forResource: name, withExtension: "html", subdirectory: "web")
             ?? Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "web")
     }
@@ -371,10 +372,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        menu.addItem(item("撒一把鱼食", #selector(feedNow)))
+        menu.addItem(item(isLagoon ? "拍一下水面" : "撒一把鱼食", #selector(feedNow)))
         menu.addItem(.separator())
-        menu.addItem(submenu("场景", opts([("锦鲤池（俯视）", "pond"), ("兰寿缸（正视）", "aquarium")], config.scene), #selector(pickScene)))
+        menu.addItem(submenu("场景", opts([("锦鲤池（俯视）", "pond"), ("兰寿缸（正视）", "aquarium"), ("浅湾（俯瞰泻湖）", "lagoon")], config.scene), #selector(pickScene)))
         menu.addItem(.separator())
+        if isLagoon {
+            // 浅湾：桌面上没法拖卡片，改成从菜单放生
+            var kinds: [(String, Any, Bool)] = []
+            for (label, key) in [("蝠鲼", "manta"), ("斑点鹰鳐", "eagle"), ("蓝点魟", "stingray"), ("绿海龟", "turtle"),
+                                 ("海月水母", "moonjelly"), ("海刺水母", "nettle"), ("一群银色小鱼", "school"),
+                                 ("彩色鱼", "reef"), ("小丑鱼", "clown"), ("黑鳍礁鲨", "shark")] {
+                kinds.append((label, key, false))
+            }
+            menu.addItem(submenu("放生", kinds, #selector(spawnCreature)))
+            menu.addItem(item("恢复默认的生物数量", #selector(resetLagoon)))
+            menu.addItem(.separator())
+            menu.addItem(toggle("显示标题", config.showTitle, #selector(toggleTitle)))
+        } else {
         if !isTank {
             menu.addItem(item("池塘名字…", #selector(renamePond)))
             let cityTitle = config.city.map { "天气城市：\($0.name)…" } ?? "设置天气城市…"
@@ -395,6 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         if !isTank { menu.addItem(toggle("显示池畔小记", config.showWidget, #selector(toggleWidget))) }
         menu.addItem(toggle(isTank ? "显示鱼缸名字" : "显示池塘名字", config.showTitle, #selector(toggleTitle)))
+        }
         menu.addItem(toggle("鼠标互动（引鱼 / 喂食）", config.interactive, #selector(toggleInteractive)))
         let fpsOptions: [(String, Any, Bool)] = [("60 帧", 60, config.fps == 60), ("30 帧（更省电）", 30, config.fps == 30)]
         let perf = submenu("性能", fpsOptions, #selector(pickFps))
@@ -457,6 +472,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let v = sender.representedObject as? Int else { return }
         if isTank { config.tankFishCount = v } else { config.fishCount = v }
         commit()
+    }
+    @objc func spawnCreature(_ sender: NSMenuItem) {
+        guard let k = sender.representedObject as? String else { return }
+        for p in ponds { p.js("window.pond && pond.spawn && pond.spawn('\(k)')") }
+    }
+    @objc func resetLagoon() {
+        for p in ponds { p.js("window.pond && pond.resetCounts && pond.resetCounts()") }
     }
     @objc func pickScene(_ sender: NSMenuItem) {
         guard let v = sender.representedObject as? String, v != config.scene else { return }
