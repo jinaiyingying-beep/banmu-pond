@@ -1,0 +1,1172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>浅湾</title>
+<style>
+  :root {
+    --panel: rgba(14, 38, 52, 0.82);
+    --panel-line: rgba(160, 225, 230, 0.18);
+    --ink: #e8f6f4;
+    --ink-soft: rgba(232, 246, 244, 0.66);
+    --accent: #8fe0d2;
+    --serif: "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", serif;
+    --sans: -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0c3a5a; color-scheme: only light; }
+  body { font-family: var(--sans); color: var(--ink); user-select: none; -webkit-user-select: none; touch-action: none; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #life { cursor: crosshair; }
+
+  .title { position: fixed; top: 22px; right: 26px; text-align: right; pointer-events: none; text-shadow: 0 2px 12px rgba(0, 30, 50, .35); }
+  .title h1 { margin: 0; font: italic 600 30px/1.1 var(--serif); letter-spacing: .08em; }
+  .title .sub { font-size: 10.5px; letter-spacing: .28em; opacity: .8; margin-top: 6px; }
+  .title .stats { display: inline-block; margin-top: 10px; padding: 4px 12px; border-radius: 999px; font-size: 11.5px; background: rgba(10, 40, 60, .38); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+
+  .hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); padding: 6px 16px; border-radius: 999px; font-size: 12px; letter-spacing: .06em;
+    background: rgba(255, 255, 255, .16); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); pointer-events: none; transition: opacity 1.2s; white-space: nowrap; }
+  .credit { position: fixed; left: 14px; bottom: 14px; font-size: 10.5px; line-height: 1.5; color: rgba(255, 255, 255, .55); pointer-events: none; }
+
+  .intro { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; transition: opacity 1.6s ease; }
+  .intro span { font: 400 46px/1 var(--serif); letter-spacing: .5em; text-indent: .5em; color: #fff; text-shadow: 0 4px 30px rgba(0, 40, 60, .5); }
+
+  /* —— 生物栏 —— */
+  .dock { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; gap: 4px; padding: 8px 10px; border-radius: 18px;
+    background: rgba(18, 52, 72, .55); border: 1px solid var(--panel-line); backdrop-filter: blur(12px) saturate(1.2); -webkit-backdrop-filter: blur(12px) saturate(1.2);
+    box-shadow: 0 10px 30px rgba(0, 20, 40, .25); max-width: calc(100vw - 32px); overflow-x: auto; scrollbar-width: none; }
+  .dock::-webkit-scrollbar { display: none; }
+  .card { flex: none; width: 74px; padding: 6px 2px 5px; border-radius: 12px; text-align: center; cursor: grab; transition: background .2s, transform .2s; }
+  .card:hover { background: rgba(255, 255, 255, .1); transform: translateY(-2px); }
+  .card:active { cursor: grabbing; }
+  .card canvas { position: static; width: 46px; height: 46px; display: block; margin: 0 auto 3px; pointer-events: none; }
+  .card b { display: block; font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card small { display: block; font-size: 9.5px; color: var(--ink-soft); margin-top: 1px; }
+  .ghost { position: fixed; width: 64px; height: 64px; pointer-events: none; transform: translate(-50%, -50%); z-index: 50; filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .35)); }
+  .ghost.bad { opacity: .45; }
+
+  /* —— 参数面板 —— */
+  .tune-btn { position: fixed; right: 18px; bottom: 22px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--panel-line); background: var(--panel);
+    color: var(--ink); font: 500 12px var(--sans); cursor: pointer; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .panel { position: fixed; top: 110px; right: 18px; width: 236px; max-height: calc(100vh - 200px); overflow-y: auto; padding: 14px 16px; border-radius: 16px;
+    background: var(--panel); border: 1px solid var(--panel-line); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 16px 40px rgba(0, 15, 30, .35); transition: opacity .25s, transform .25s; scrollbar-width: thin; scrollbar-color: rgba(143, 224, 210, .35) transparent; }
+  .panel.hidden { opacity: 0; transform: translateX(16px); pointer-events: none; }
+  .panel h2 { margin: 0 0 10px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+  .panel h2 button { border: 0; background: none; color: var(--ink-soft); font-size: 18px; cursor: pointer; line-height: 1; }
+  .panel h3 { margin: 14px 0 6px; font-size: 11px; font-weight: 600; letter-spacing: .12em; color: var(--accent); }
+  .row { margin: 7px 0 9px; }
+  .row label { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--ink-soft); margin-bottom: 4px; }
+  .row label output { color: var(--ink); font-variant-numeric: tabular-nums; }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 4px; background: rgba(143, 224, 210, .22); outline: none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px rgba(143, 224, 210, .2); cursor: pointer; }
+  input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; background: var(--accent); cursor: pointer; }
+  .panel .reset { margin-top: 10px; width: 100%; padding: 7px; border-radius: 10px; border: 1px solid var(--panel-line); background: rgba(255, 255, 255, .06); color: var(--ink); font: 12px var(--sans); cursor: pointer; }
+  .hidden-fade { opacity: 0 !important; }
+  @media (max-width: 640px) {
+    .title h1 { font-size: 22px; } .title .sub { display: none; }
+    .panel { top: 80px; width: calc(100vw - 52px); }
+    .credit { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="water"></canvas>
+<canvas id="life"></canvas>
+
+<div class="intro" id="intro"><span>浅湾来潮</span></div>
+<div class="hint" id="hint">点触水面荡起涟漪 · 把下面的生物拖进海里</div>
+<div class="title">
+  <h1>浅湾</h1>
+  <div class="sub">热带泻湖 · 俯瞰</div>
+  <div class="stats" id="stats"></div>
+</div>
+<div class="credit">程序生成的海 · 每次打开都略有不同</div>
+<div class="dock" id="dock"></div>
+<button class="tune-btn" id="tuneBtn">参数调节 ☰</button>
+<aside class="panel hidden" id="panel"></aside>
+
+<script>
+"use strict";
+/* ============================================================
+   浅湾 · 俯瞰热带泻湖
+   水面：WebGL 片元着色器（深浅、折射、焦散、涟漪、耀斑、岸边浪花）
+   生物：Canvas 2D（影子 + 本体），叠在水面上
+   ============================================================ */
+const TAU = Math.PI * 2;
+const rand = (a = 1, b) => (b === undefined ? Math.random() * a : a + Math.random() * (b - a));
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const pick = (a) => a[(Math.random() * a.length) | 0];
+const angDiff = (a, b) => { let d = (b - a) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return d; };
+const smooth = (t) => t * t * (3 - 2 * t);
+function seeded(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+function makeCanvas(w, h) { const c = document.createElement("canvas"); c.width = Math.max(1, w | 0); c.height = Math.max(1, h | 0); return c; }
+
+/* ---------- 参数（面板里可调） ---------- */
+const PARAM_DEFS = [
+  { sec: "生物数量" },
+  { k: "manta", label: "蝠鲼", min: 0, max: 8, step: 1, v: 2 },
+  { k: "eagle", label: "斑点鹰鳐", min: 0, max: 10, step: 1, v: 4 },
+  { k: "stingray", label: "蓝点魟", min: 0, max: 8, step: 1, v: 2 },
+  { k: "turtle", label: "绿海龟", min: 0, max: 6, step: 1, v: 1 },
+  { k: "moonjelly", label: "海月水母", min: 0, max: 16, step: 1, v: 5 },
+  { k: "nettle", label: "太平洋海刺水母", min: 0, max: 12, step: 1, v: 4 },
+  { k: "school", label: "银色鱼群（条）", min: 0, max: 240, step: 10, v: 120 },
+  { k: "reef", label: "珊瑚彩色鱼", min: 0, max: 20, step: 1, v: 6 },
+  { k: "clown", label: "海葵小丑鱼", min: 0, max: 12, step: 1, v: 4 },
+  { k: "shark", label: "黑鳍礁鲨", min: 0, max: 4, step: 1, v: 1 },
+  { sec: "游动与互动" },
+  { k: "speed", label: "鱼类游动速度", min: 0.3, max: 2, step: 0.05, v: 1 },
+  { k: "fishSize", label: "小鱼体型", min: 0.6, max: 1.8, step: 0.05, v: 1.1 },
+  { k: "cohesion", label: "鱼群聚集程度", min: 0, max: 2, step: 0.05, v: 1 },
+  { k: "scare", label: "互动惊扰半径", min: 0.05, max: 0.3, step: 0.005, v: 0.12 },
+  { sec: "水面与光" },
+  { k: "reflect", label: "水面反射强度", min: 0, max: 1, step: 0.05, v: 0.45 },
+  { k: "glint", label: "阳光耀斑亮度", min: 0, max: 2, step: 0.05, v: 1 },
+  { k: "caustic", label: "水底光纹", min: 0, max: 2, step: 0.05, v: 1 },
+  { k: "clarity", label: "海水通透度", min: 0.3, max: 1.6, step: 0.05, v: 1 },
+  { k: "wave", label: "波浪大小", min: 0, max: 2, step: 0.05, v: 1 },
+];
+const P = {};
+for (const d of PARAM_DEFS) if (d.k) P[d.k] = d.v;
+try { Object.assign(P, JSON.parse(localStorage.getItem("lagoon-params") || "{}")); } catch (e) {}
+const saveParams = () => { try { localStorage.setItem("lagoon-params", JSON.stringify(P)); } catch (e) {} };
+
+/* ---------- 画布 ---------- */
+const glCanvas = document.getElementById("water");
+const lifeCanvas = document.getElementById("life");
+const ctx = lifeCanvas.getContext("2d");
+let W = 0, H = 0, DPR = 1, GDPR = 1, S = 1;
+
+/* ============================================================
+   海底：深度图 + 海底贴图（沙、礁、海葵、海星、海草），尺寸变化时重画
+   ============================================================ */
+const DEPTH_SCALE = 0.25;
+let depthCanvas, depthData, depthW, depthH, bottomCanvas;
+let reefs = [], anemones = [];
+
+function baseDepth(u, v) {
+  // 左上角是沙滩，往右下越来越深
+  const s = u * 1.0 + v * 0.82;
+  const shore = 0.43 + 0.05 * Math.sin(u * 7.3 + 1.3) + 0.035 * Math.sin(v * 10.7 + 0.4) + 0.02 * Math.sin((u + v) * 23.0);
+  return clamp((s - shore) * 1.35, -1, 1);
+}
+
+function buildWorld() {
+  const R = seeded(8848), r = (a = 1, b) => (b === undefined ? R() * a : a + R() * (b - a));
+  // 礁石：分布在中等深度
+  reefs = []; anemones = [];
+  let tries = 0;
+  const nReef = clamp(Math.round(W * H / 110000), 6, 14);
+  while (reefs.length < nReef && tries++ < 400) {
+    const x = r(W * 0.1, W * 0.92), y = r(H * 0.12, H * 0.9);
+    const d = baseDepth(x / W, y / H);
+    if (d < 0.22 || d > 0.85) continue;
+    const rad = r(34, 80) * S;
+    if (reefs.some((q) => Math.hypot(q.x - x, q.y - y) < (q.r + rad) * 0.9)) continue;
+    const pts = [], n = 14;
+    for (let k = 0; k < n; k++) pts.push(rad * r(0.65, 1.15));
+    reefs.push({ x, y, r: rad, pts, rot: r(TAU), hue: pick(["#3b3f6e", "#4a3d63", "#3d5560", "#5a4a4a", "#2f4a62"]) });
+  }
+  for (const rf of reefs) {
+    const n = 1 + ((r(3)) | 0);
+    for (let k = 0; k < n; k++) {
+      const a = r(TAU), d = r(0, rf.r * 0.5);
+      anemones.push({ x: rf.x + Math.cos(a) * d, y: rf.y + Math.sin(a) * d, r: r(14, 26) * S, col: pick(["#e0507a", "#ff7aa8", "#7a8cff", "#c86ad8", "#ff9a5a"]), reef: rf });
+    }
+  }
+
+  // —— 深度图（低分辨率，着色器线性插值） ——
+  depthW = Math.ceil(W * DEPTH_SCALE); depthH = Math.ceil(H * DEPTH_SCALE);
+  depthCanvas = makeCanvas(depthW, depthH);
+  const dg = depthCanvas.getContext("2d");
+  const img = dg.createImageData(depthW, depthH);
+  for (let y = 0; y < depthH; y++) for (let x = 0; x < depthW; x++) {
+    const d = baseDepth(x / depthW, y / depthH);
+    const v = Math.round(((d + 1) / 2) * 255), k = (y * depthW + x) * 4;
+    img.data[k] = img.data[k + 1] = img.data[k + 2] = v; img.data[k + 3] = 255;
+  }
+  dg.putImageData(img, 0, 0);
+  // 礁石让局部变浅
+  for (const rf of reefs) {
+    const x = rf.x * DEPTH_SCALE, y = rf.y * DEPTH_SCALE, rr = rf.r * DEPTH_SCALE * 1.3;
+    const gr = dg.createRadialGradient(x, y, 0, x, y, rr);
+    gr.addColorStop(0, "rgba(0,0,0,0.08)"); gr.addColorStop(1, "rgba(0,0,0,0)");
+    dg.fillStyle = gr; dg.beginPath(); dg.arc(x, y, rr, 0, TAU); dg.fill();
+  }
+  depthData = dg.getImageData(0, 0, depthW, depthH).data;
+
+  // —— 海底贴图 ——
+  const BS = 0.6;
+  bottomCanvas = makeCanvas(W * BS, H * BS);
+  const g = bottomCanvas.getContext("2d");
+  g.scale(BS, BS);
+  // 沙底：干沙、湿沙、水下的沙
+  const sand = g.createImageData(Math.ceil(W * BS), Math.ceil(H * BS));
+  for (let y = 0; y < sand.height; y++) for (let x = 0; x < sand.width; x++) {
+    const u = x / sand.width, v = y / sand.height, d = baseDepth(u, v);
+    const n = (Math.sin(x * 0.9 + y * 0.3) * Math.sin(y * 1.1 - x * 0.2)) * 6 + (R() - 0.5) * 14;
+    let cr, cg, cb;
+    if (d < -0.04) { cr = 240; cg = 228; cb = 200; }            // 干沙
+    else if (d < 0.05) { cr = 214; cg = 198; cb = 160; }         // 湿沙
+    else { const t = smooth(clamp(d, 0, 1)); cr = lerp(222, 170, t); cg = lerp(206, 176, t); cb = lerp(166, 160, t); }
+    const k = (y * sand.width + x) * 4;
+    sand.data[k] = cr + n; sand.data[k + 1] = cg + n; sand.data[k + 2] = cb + n * 0.8; sand.data[k + 3] = 255;
+  }
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.putImageData(sand, 0, 0); g.restore();
+  // 浅水区的沙纹
+  g.lineCap = "round";
+  for (let i = 0; i < 260; i++) {
+    const x = r(W), y = r(H), d = baseDepth(x / W, y / H);
+    if (d < 0.02 || d > 0.45) continue;
+    g.strokeStyle = `rgba(150,130,90,${r(0.08, 0.18)})`; g.lineWidth = r(1, 2.4) * S;
+    const len = r(20, 60) * S, a = -0.6 + r(-0.2, 0.2);
+    g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(x + Math.cos(a) * len * 0.5 + 4 * S, y + Math.sin(a) * len * 0.5 - 4 * S, x + Math.cos(a) * len, y + Math.sin(a) * len); g.stroke();
+  }
+  // 海草：一丛丛细长叶片
+  g.lineCap = "round";
+  for (let i = 0; i < 22; i++) {
+    const cx = r(W), cy = r(H), d = baseDepth(cx / W, cy / H);
+    if (d < 0.25 || d > 0.8) continue;
+    for (let k = 0; k < 90; k++) {
+      const a = r(TAU), dd = Math.sqrt(r()) * 55 * S, x = cx + Math.cos(a) * dd, y = cy + Math.sin(a) * dd;
+      const dir = 0.7 + r(-0.5, 0.5), len = r(8, 20) * S;
+      g.strokeStyle = `rgba(${r(50, 80) | 0},${r(95, 125) | 0},${r(70, 90) | 0},${r(0.25, 0.5)})`; g.lineWidth = r(1, 2) * S;
+      g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(x + Math.cos(dir) * len * 0.5 + 3 * S, y + Math.sin(dir) * len * 0.5, x + Math.cos(dir) * len, y + Math.sin(dir) * len); g.stroke();
+    }
+  }
+  // 礁石
+  for (const rf of reefs) {
+    g.save(); g.translate(rf.x, rf.y); g.rotate(rf.rot);
+    const path = new Path2D(), n = rf.pts.length;
+    for (let k = 0; k <= n; k++) {
+      const a0 = (k / n) * TAU, a1 = ((k + 1) / n) * TAU, p0 = rf.pts[k % n], p1 = rf.pts[(k + 1) % n];
+      const x0 = Math.cos(a0) * p0, y0 = Math.sin(a0) * p0, x1 = Math.cos(a1) * p1, y1 = Math.sin(a1) * p1;
+      if (k === 0) path.moveTo((x0 + x1) / 2, (y0 + y1) / 2); else path.quadraticCurveTo(x0, y0, (x0 + x1) / 2, (y0 + y1) / 2);
+    }
+    path.closePath();
+    g.fillStyle = "rgba(20,30,40,0.35)"; g.save(); g.translate(5 * S, 7 * S); g.fill(path); g.restore();
+    const rg = g.createRadialGradient(-rf.r * 0.3, -rf.r * 0.3, rf.r * 0.1, 0, 0, rf.r * 1.1);
+    rg.addColorStop(0, "#7a7090"); rg.addColorStop(0.5, rf.hue); rg.addColorStop(1, "#1f2a3a");
+    g.fillStyle = rg; g.fill(path);
+    g.save(); g.clip(path);
+    for (let k = 0; k < rf.r * 1.6; k++) { // 珊瑚的颗粒质感
+      const a = r(TAU), d = Math.sqrt(r()) * rf.r;
+      g.fillStyle = pick(["rgba(255,180,200,0.18)", "rgba(120,200,190,0.16)", "rgba(20,20,40,0.25)", "rgba(240,220,170,0.14)"]);
+      g.beginPath(); g.arc(Math.cos(a) * d, Math.sin(a) * d, r(1.5, 5) * S, 0, TAU); g.fill();
+    }
+    g.restore();
+    g.strokeStyle = "rgba(200,190,230,0.25)"; g.lineWidth = 1.5 * S; g.stroke(path);
+    g.restore();
+    // 海胆
+    for (let k = 0; k < 3; k++) {
+      const a = r(TAU), d = r(rf.r * 0.2, rf.r * 0.9), x = rf.x + Math.cos(a) * d, y = rf.y + Math.sin(a) * d, ur = r(5, 9) * S;
+      g.strokeStyle = "rgba(20,15,30,0.85)"; g.lineWidth = 0.8 * S;
+      for (let s = 0; s < 22; s++) { const b = (s / 22) * TAU; g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(b) * ur * r(0.7, 1.3), y + Math.sin(b) * ur * r(0.7, 1.3)); g.stroke(); }
+      g.fillStyle = "#231a2c"; g.beginPath(); g.arc(x, y, ur * 0.35, 0, TAU); g.fill();
+    }
+  }
+  // 海葵：放射状的细触手
+  for (const an of anemones) {
+    const { x, y, r: ar, col } = an;
+    const gl = g.createRadialGradient(x, y, 0, x, y, ar * 1.3);
+    gl.addColorStop(0, col); gl.addColorStop(1, "rgba(0,0,0,0)");
+    g.globalAlpha = 0.35; g.fillStyle = gl; g.beginPath(); g.arc(x, y, ar * 1.3, 0, TAU); g.fill(); g.globalAlpha = 1;
+    g.lineWidth = 1.1 * S; g.lineCap = "round";
+    for (let s = 0; s < 46; s++) {
+      const b = (s / 46) * TAU + r(-0.05, 0.05), l = ar * r(0.75, 1.05);
+      g.strokeStyle = s % 2 ? col : "rgba(255,240,250,0.85)";
+      g.beginPath(); g.moveTo(x + Math.cos(b) * ar * 0.18, y + Math.sin(b) * ar * 0.18);
+      g.quadraticCurveTo(x + Math.cos(b + 0.15) * l * 0.6, y + Math.sin(b + 0.15) * l * 0.6, x + Math.cos(b) * l, y + Math.sin(b) * l); g.stroke();
+      g.fillStyle = "rgba(255,240,250,0.9)"; g.beginPath(); g.arc(x + Math.cos(b) * l, y + Math.sin(b) * l, 1.2 * S, 0, TAU); g.fill();
+    }
+    g.fillStyle = "#3a1d2e"; g.beginPath(); g.arc(x, y, ar * 0.2, 0, TAU); g.fill();
+  }
+  // 海星和贝壳（沙地和浅水）
+  for (let i = 0; i < 16; i++) {
+    const x = r(W), y = r(H), d = baseDepth(x / W, y / H);
+    if (d < -0.5 || d > 0.4) continue;
+    const s = r(7, 12) * S, col = pick(["#d9562e", "#e07a3a", "#c8402e", "#e8a04a"]);
+    g.save(); g.translate(x, y); g.rotate(r(TAU));
+    g.fillStyle = "rgba(60,40,20,0.25)"; starPath(g, s * 1.05, 2, 3); g.fill();
+    g.fillStyle = col; starPath(g, s, 0, 0); g.fill();
+    g.fillStyle = "rgba(255,230,190,0.5)"; for (let k = 0; k < 5; k++) { const a = (k / 5) * TAU - Math.PI / 2; g.beginPath(); g.arc(Math.cos(a) * s * 0.5, Math.sin(a) * s * 0.5, s * 0.08, 0, TAU); g.fill(); }
+    g.restore();
+  }
+  for (let i = 0; i < 30; i++) {
+    const x = r(W), y = r(H), d = baseDepth(x / W, y / H);
+    if (d > 0.1) continue;
+    g.fillStyle = pick(["#fff4e6", "#f2d6c4", "#e8e0d0"]); g.beginPath(); g.ellipse(x, y, r(2, 4) * S, r(1.5, 3) * S, r(TAU), 0, TAU); g.fill();
+  }
+}
+function starPath(g, s, ox, oy) {
+  g.beginPath();
+  for (let k = 0; k < 10; k++) {
+    const a = (k / 10) * TAU - Math.PI / 2, rr = k % 2 ? s * 0.38 : s;
+    const x = ox + Math.cos(a) * rr, y = oy + Math.sin(a) * rr;
+    k ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  g.closePath();
+}
+// 某点的水深：-1 陆地 … 1 深海
+function depthAt(x, y) {
+  const ix = clamp((x * DEPTH_SCALE) | 0, 0, depthW - 1), iy = clamp((y * DEPTH_SCALE) | 0, 0, depthH - 1);
+  return (depthData[(iy * depthW + ix) * 4] / 255) * 2 - 1;
+}
+
+/* ============================================================
+   WebGL 水面
+   ============================================================ */
+const MAX_RIPPLES = 12;
+const ripples = []; // {x, y, t0, s}
+let gl, prog, uni = {}, texBottom, texDepth, glOK = false;
+
+const VS = `attribute vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }`;
+const FS = `
+precision highp float;
+uniform sampler2D uBottom, uDepth;
+uniform vec2 uRes;
+uniform float uTime, uScale;
+uniform vec4 uRip[${MAX_RIPPLES}];
+uniform vec4 uP;   // reflect, glint, caustic, clarity
+uniform float uWave;
+
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+  return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y); }
+float waveH(vec2 p, float t){
+  float h = 0.0;
+  h += sin(dot(p, vec2(0.021, 0.013)) + t*0.9) * 0.5;
+  h += sin(dot(p, vec2(-0.017, 0.027)) + t*1.3) * 0.35;
+  h += sin(dot(p, vec2(0.043, -0.031)) + t*1.9) * 0.18;
+  h += (noise(p*0.035 + t*0.15) - 0.5) * 0.6;
+  return h;
+}
+// 经典的「水底焦散」迭代
+float caustic(vec2 uv, float t){
+  vec2 p = mod(uv * 6.2831, 6.2831) - 250.0;
+  vec2 i = p; float c = 1.0; float inten = 0.005;
+  for (int n = 0; n < 4; n++) {
+    float tt = t * (1.0 - (3.5 / float(n + 1)));
+    i = p + vec2(cos(tt - i.x) + sin(tt + i.y), sin(tt - i.y) + cos(tt + i.x));
+    c += 1.0 / length(vec2(p.x / (sin(i.x + tt) / inten), p.y / (cos(i.y + tt) / inten)));
+  }
+  c /= 4.0; c = 1.17 - pow(c, 1.4);
+  return clamp(pow(abs(c), 8.0), 0.0, 1.5);
+}
+void main(){
+  vec2 frag = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
+  vec2 px = frag / uScale;                 // CSS 像素坐标
+  vec2 uv = frag / uRes;
+  float depth = texture2D(uDepth, uv).r * 2.0 - 1.0;
+  float wet = smoothstep(-0.02, 0.06, depth);
+
+  // 水面法线：波浪 + 涟漪
+  float e = 2.0, t = uTime;
+  vec2 n = vec2(waveH(px + vec2(e,0.0), t) - waveH(px - vec2(e,0.0), t),
+                waveH(px + vec2(0.0,e), t) - waveH(px - vec2(0.0,e), t)) * 0.55 * uWave;
+  float ringLight = 0.0;
+  for (int k = 0; k < ${MAX_RIPPLES}; k++) {
+    vec4 r = uRip[k];
+    if (r.w <= 0.0) continue;
+    float age = t - r.z;
+    if (age < 0.0 || age > 4.0) continue;
+    vec2 d = px - r.xy; float dist = length(d) + 0.001;
+    float front = age * 120.0;
+    float x = dist - front;
+    float env = exp(-x * x / (900.0 + age * 400.0)) * exp(-age * 0.9) * r.w;
+    float w = sin(x * 0.12) * env;
+    n += (d / dist) * w * 0.9;
+    ringLight += max(0.0, -w) * 0.6;
+  }
+
+  // 折射：越深偏得越多
+  vec2 refr = n * (0.004 + 0.012 * clamp(depth, 0.0, 1.0)) * wet;
+  vec3 bottom = texture2D(uBottom, uv + refr).rgb;
+
+  // 水色：浅处透出沙子的青绿，深处是蓝
+  float d01 = clamp(depth, 0.0, 1.0);
+  float murk = clamp(pow(d01, 0.85) / uP.w, 0.0, 1.0);
+  vec3 shallow = vec3(0.28, 0.80, 0.76);
+  vec3 deep = vec3(0.04, 0.24, 0.45);
+  vec3 water = bottom * mix(vec3(1.0), shallow * 1.15, smoothstep(0.0, 0.25, d01));
+  water = mix(water, deep, murk * 0.88);
+
+  // 焦散：浅处强、深处弱
+  float cst = caustic(px / (520.0) + refr * 3.0, t * 0.55) * (1.0 - murk) * uP.z;
+  water += vec3(0.95, 1.0, 0.9) * cst * 0.35 * wet;
+
+  // 天空反射 + 太阳耀斑
+  vec3 N = normalize(vec3(-n * 1.6, 1.0));
+  vec3 V = vec3(0.0, 0.0, 1.0);
+  vec3 L = normalize(vec3(-0.35, -0.45, 0.82));
+  float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0) * 6.0;
+  vec3 sky = mix(vec3(0.75, 0.9, 1.0), vec3(0.45, 0.7, 0.95), uv.y);
+  water = mix(water, sky, clamp(fres * uP.x + 0.08 * uP.x, 0.0, 0.6) * wet);
+  vec3 Rv = reflect(-L, N);
+  float spec = pow(max(dot(Rv, V), 0.0), 260.0);
+  float sparkle = step(0.82, noise(px * 0.25 + t * 1.5)) * pow(max(dot(Rv, V), 0.0), 30.0);
+  water += vec3(1.0, 0.98, 0.9) * (spec * 2.2 + sparkle * 0.9) * uP.y * wet;
+  water += vec3(1.0) * ringLight * 0.35 * wet;
+
+  // 岸边：一层层推上来的白浪
+  float lap = sin(t * 0.8 - depth * 60.0) * 0.5 + 0.5;
+  float foamBand = smoothstep(0.07, 0.0, abs(depth - 0.015 - lap * 0.035));
+  float foamNoise = noise(px * 0.08 + vec2(t * 0.3, 0.0));
+  float foam = foamBand * smoothstep(0.35, 0.75, foamNoise + 0.25);
+  vec3 col = mix(bottom, water, wet);
+  col = mix(col, vec3(1.0), foam * 0.75);
+  // 湿沙的反光
+  col += vec3(0.1) * smoothstep(-0.06, 0.0, depth) * (1.0 - wet);
+
+  // 四角略暗
+  vec2 q = uv - 0.5; col *= 1.0 - dot(q, q) * 0.35;
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+function initGL() {
+  gl = glCanvas.getContext("webgl", { antialias: false, premultipliedAlpha: false }) || glCanvas.getContext("experimental-webgl");
+  if (!gl) return false;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); return null; } return s; };
+  const vs = sh(gl.VERTEX_SHADER, VS), fs = sh(gl.FRAGMENT_SHADER, FS);
+  if (!vs || !fs) return false;
+  prog = gl.createProgram(); gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(prog)); return false; }
+  gl.useProgram(prog);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, "p"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  for (const n of ["uBottom", "uDepth", "uRes", "uTime", "uScale", "uRip", "uP", "uWave"]) uni[n] = gl.getUniformLocation(prog, n);
+  texBottom = gl.createTexture(); texDepth = gl.createTexture();
+  return true;
+}
+function uploadTex(tex, unit, src) {
+  gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+const ripBuf = new Float32Array(MAX_RIPPLES * 4);
+function drawWater(t) {
+  if (!glOK) { // 没有 WebGL 时退回：直接画海底 + 一层水色
+    return;
+  }
+  gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+  gl.uniform1i(uni.uBottom, 0); gl.uniform1i(uni.uDepth, 1);
+  gl.uniform2f(uni.uRes, glCanvas.width, glCanvas.height);
+  gl.uniform1f(uni.uTime, t); gl.uniform1f(uni.uScale, GDPR);
+  gl.uniform4f(uni.uP, P.reflect, P.glint, P.caustic, P.clarity);
+  gl.uniform1f(uni.uWave, P.wave);
+  ripBuf.fill(0);
+  const live = ripples.filter((r) => t - r.t0 < 4).slice(-MAX_RIPPLES);
+  live.forEach((r, i) => { ripBuf[i * 4] = r.x; ripBuf[i * 4 + 1] = r.y; ripBuf[i * 4 + 2] = r.t0; ripBuf[i * 4 + 3] = r.s; });
+  gl.uniform4fv(uni.uRip, ripBuf);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+function addRipple(x, y, s = 1) {
+  ripples.push({ x, y, t0: T, s });
+  if (ripples.length > 40) ripples.splice(0, ripples.length - 40);
+}
+
+/* ============================================================
+   生物
+   ============================================================ */
+const agents = [];
+let scared = [];   // 惊扰点 {x, y, t}
+
+// 通用：避开沙滩、保持在画面里
+function steerSafe(a, desired, minDepth, margin) {
+  const look = 60 * S + a.size * 0.8;
+  const ax = a.x + Math.cos(desired) * look, ay = a.y + Math.sin(desired) * look;
+  let fx = Math.cos(desired), fy = Math.sin(desired);
+  if (depthAt(ax, ay) < minDepth || depthAt(a.x, a.y) < minDepth) {
+    // 往更深的方向转
+    const e = 30 * S;
+    const gx = depthAt(a.x + e, a.y) - depthAt(a.x - e, a.y), gy = depthAt(a.x, a.y + e) - depthAt(a.x, a.y - e);
+    const gl = Math.hypot(gx, gy) || 1;
+    fx += (gx / gl) * 3; fy += (gy / gl) * 3;
+  }
+  const m = margin;
+  if (a.x < m) fx += (m - a.x) / m * 2.5; if (a.x > W - m) fx -= (a.x - (W - m)) / m * 2.5;
+  if (a.y < m) fy += (m - a.y) / m * 2.5; if (a.y > H - m) fy -= (a.y - (H - m)) / m * 2.5;
+  return Math.atan2(fy, fx);
+}
+function fleeFrom(a, radiusMul = 1) {
+  let fx = 0, fy = 0, hit = false;
+  const R = P.scare * Math.min(W, H) * 2.2 * radiusMul;
+  for (const s of scared) {
+    const age = T - s.t; if (age > 2.5) continue;
+    const dx = a.x - s.x, dy = a.y - s.y, d = Math.hypot(dx, dy);
+    if (d < R && d > 0.1) { const k = (1 - d / R) * (1 - age / 2.5); fx += (dx / d) * k; fy += (dy / d) * k; hit = true; }
+  }
+  return hit ? { fx, fy } : null;
+}
+function shadowOf(g, x, y, h, draw) {
+  // h：离水底的高度（0~1），越高影子越远越淡
+  g.save(); g.translate(x + 10 * S * h, y + 16 * S * h); g.globalAlpha = 0.22 * (1 - h * 0.4); g.fillStyle = "#06243a";
+  draw(); g.restore();
+}
+
+/* ---------- 银色鱼群：boids + 绕着一个移动中心打转 ---------- */
+const schools = [];
+function makeSchoolCenters() {
+  schools.length = 0;
+  for (let i = 0; i < 2; i++) schools.push({ ph: rand(TAU), rx: rand(0.12, 0.22), ry: rand(0.1, 0.18), cx: rand(0.5, 0.75), cy: rand(0.45, 0.7), sp: rand(0.05, 0.09), x: 0, y: 0 });
+}
+class SchoolFish {
+  constructor(x, y) { this.type = "school"; this.x = x; this.y = y; this.a = rand(TAU); this.v = rand(40, 70); this.school = (Math.random() * schools.length) | 0; this.size = rand(5, 7.5); this.ph = rand(TAU); }
+  update(dt, grid) {
+    const sc = schools[this.school]; const sp = 60 * S * P.speed;
+    let fx = 0, fy = 0;
+    // 围着鱼群中心转圈（切向 + 少许向心）
+    const dx = sc.x - this.x, dy = sc.y - this.y, d = Math.hypot(dx, dy) || 1;
+    const ring = 90 * S * (0.8 + 0.4 * Math.sin(T * 0.2 + this.school));
+    fx += (-dy / d) * 1.0 + (dx / d) * (d - ring) / ring * 0.9 * P.cohesion;
+    fy += (dx / d) * 1.0 + (dy / d) * (d - ring) / ring * 0.9 * P.cohesion;
+    // 邻居
+    let ax = 0, ay = 0, n = 0;
+    const gx = (this.x / 50) | 0, gy = (this.y / 50) | 0;
+    for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+      const cell = grid.get((gx + ox) * 4099 + gy + oy); if (!cell) continue;
+      for (const o of cell) {
+        if (o === this) continue;
+        const ex = this.x - o.x, ey = this.y - o.y, e2 = ex * ex + ey * ey;
+        if (e2 > 2500) continue;
+        const e = Math.sqrt(e2) || 0.1;
+        if (e < 9 * S) { fx += ex / e * 1.4; fy += ey / e * 1.4; }
+        ax += Math.cos(o.a); ay += Math.sin(o.a); n++;
+      }
+    }
+    if (n) { fx += ax / n * 0.8 * P.cohesion; fy += ay / n * 0.8 * P.cohesion; }
+    let want = sp;
+    const fl = fleeFrom(this);
+    if (fl) { fx += fl.fx * 8; fy += fl.fy * 8; want = sp * 3.2; }
+    for (const sh of agents) if (sh.type === "shark") {
+      const ex = this.x - sh.x, ey = this.y - sh.y, e = Math.hypot(ex, ey);
+      if (e < 120 * S) { fx += ex / e * 3; fy += ey / e * 3; want = sp * 2.6; }
+    }
+    const des = steerSafe(this, Math.atan2(fy, fx), 0.08, 30 * S);
+    this.a += clamp(angDiff(this.a, des), -5 * dt, 5 * dt);
+    this.v = lerp(this.v, want, 1 - Math.exp(-dt * 3));
+    this.x += Math.cos(this.a) * this.v * dt; this.y += Math.sin(this.a) * this.v * dt;
+    this.ph += dt * 14;
+  }
+  draw(g, shadow) {
+    const s = this.size * S * P.fishSize, wig = Math.sin(this.ph) * 0.25;
+    g.save(); g.translate(this.x, this.y); g.rotate(this.a);
+    if (shadow) { g.translate(7 * S, 11 * S); g.globalAlpha = 0.18; g.fillStyle = "#06243a"; g.beginPath(); g.ellipse(0, 0, s, s * 0.28, 0, 0, TAU); g.fill(); g.restore(); return; }
+    g.fillStyle = "rgba(235,245,250,0.92)";
+    g.beginPath(); g.ellipse(0, 0, s, s * 0.26, 0, 0, TAU); g.fill();
+    g.beginPath(); g.moveTo(-s * 0.85, 0); g.lineTo(-s * 1.45, -s * 0.32 + wig * s); g.lineTo(-s * 1.4, s * 0.32 + wig * s); g.closePath(); g.fill();
+    g.fillStyle = "rgba(90,130,160,0.7)"; g.fillRect(-s * 0.6, -s * 0.06, s * 1.3, s * 0.12);
+    g.restore();
+  }
+}
+
+/* ---------- 有脊柱、会扭动的鱼（彩色鱼、小丑鱼、鲨鱼） ---------- */
+class SpineFish {
+  constructor(type, x, y) {
+    this.type = type; this.x = x; this.y = y; this.a = rand(TAU); this.ph = rand(TAU);
+    const cfg = {
+      reef: { len: rand(18, 26), wid: 0.34, sp: 34, seg: 6 },
+      clown: { len: rand(14, 18), wid: 0.36, sp: 26, seg: 6 },
+      shark: { len: rand(120, 160), wid: 0.17, sp: 52, seg: 12 },
+    }[type];
+    this.cfg = cfg; this.size = cfg.len * S;
+    this.v = cfg.sp * S; this.pts = [];
+    for (let i = 0; i < cfg.seg; i++) this.pts.push([x - Math.cos(this.a) * i * this.size / (cfg.seg - 1), y - Math.sin(this.a) * i * this.size / (cfg.seg - 1)]);
+    if (type === "reef") this.colors = pick([["#2f6fe0", "#f4d23a"], ["#f2c230", "#1f3d8f"], ["#7a3fd0", "#f0a030"], ["#18b8c8", "#f05a8a"], ["#e8e030", "#202838"]]);
+    this.home = null; this.timer = 0; this.depthH = type === "shark" ? 0.5 : 0.25;
+  }
+  update(dt) {
+    const c = this.cfg; let want = c.sp * S * P.speed, turn = 1.8;
+    let des;
+    if (this.type === "shark") {
+      this.timer -= dt;
+      if (this.timer <= 0 || !this.tgt) { this.timer = rand(5, 10); let tx, ty, k = 0; do { tx = rand(W * 0.1, W * 0.95); ty = rand(H * 0.1, H * 0.95); } while (depthAt(tx, ty) < 0.35 && ++k < 30); this.tgt = [tx, ty]; }
+      des = Math.atan2(this.tgt[1] - this.y, this.tgt[0] - this.x) + Math.sin(T * 0.4 + this.ph) * 0.4;
+      turn = 1.2;
+    } else {
+      // 绕着自己的礁石/海葵打转
+      if (!this.home) {
+        const list = this.type === "clown" && anemones.length ? anemones : reefs;
+        this.home = list.length ? pick(list) : { x: W * 0.6, y: H * 0.6, r: 60 * S };
+      }
+      const hx = this.home.x, hy = this.home.y, hr = (this.home.r || 20) * (this.type === "clown" ? 1.1 : 1.6);
+      const dx = hx - this.x, dy = hy - this.y, d = Math.hypot(dx, dy) || 1;
+      des = Math.atan2(dy, dx) + (d < hr ? Math.PI / 2 + Math.sin(T * 0.7 + this.ph) * 0.8 : 0);
+      if (Math.random() < dt * 0.05) this.home = null;
+    }
+    const fl = fleeFrom(this, this.type === "shark" ? 0.6 : 1);
+    if (fl) { des = Math.atan2(fl.fy, fl.fx); want *= 2.8; turn = 5; }
+    des = steerSafe(this, des, this.type === "shark" ? 0.3 : 0.08, 40 * S);
+    this.a += clamp(angDiff(this.a, des), -turn * dt, turn * dt);
+    this.v = lerp(this.v, want, 1 - Math.exp(-dt * 2));
+    this.x += Math.cos(this.a) * this.v * dt; this.y += Math.sin(this.a) * this.v * dt;
+    this.ph += dt * (4 + this.v / S * 0.08);
+    const p = this.pts, seg = this.size / (c.seg - 1);
+    p[0][0] = this.x; p[0][1] = this.y;
+    for (let i = 1; i < p.length; i++) {
+      const ex = p[i][0] - p[i - 1][0], ey = p[i][1] - p[i - 1][1], e = Math.hypot(ex, ey) || 1;
+      p[i][0] = p[i - 1][0] + ex / e * seg; p[i][1] = p[i - 1][1] + ey / e * seg;
+    }
+  }
+  outline(scale = 1, wob = true) {
+    const c = this.cfg, p = this.pts, n = p.length, half = this.size * c.wid * 0.5 * (this.type === "shark" ? 1 : P.fishSize);
+    const L = [], Rr = [];
+    for (let i = 0; i < n; i++) {
+      const a = p[Math.max(0, i - 1)], b = p[Math.min(n - 1, i + 1)];
+      let tx = a[0] - b[0], ty = a[1] - b[1]; const d = Math.hypot(tx, ty) || 1; tx /= d; ty /= d;
+      const k = i / (n - 1), w = half * (k < 0.3 ? Math.sqrt(1 - ((0.3 - k) / 0.32) ** 2) : Math.pow(1 - (k - 0.3) / 0.7, 1.2) * 0.9 + 0.08);
+      const wobble = wob ? Math.sin(this.ph - i * 0.6) * this.size * 0.03 * k : 0;
+      const cx = p[i][0] - ty * wobble, cy = p[i][1] + tx * wobble;
+      L.push([cx - ty * w, cy + tx * w]); Rr.push([cx + ty * w, cy - tx * w]);
+    }
+    return { L, R: Rr };
+  }
+  draw(g, shadow) {
+    const { L, R } = this.outline();
+    const p = this.pts, n = p.length;
+    const path = new Path2D();
+    path.moveTo(L[0][0], L[0][1]);
+    for (let i = 1; i < n; i++) path.lineTo(L[i][0], L[i][1]);
+    for (let i = n - 1; i >= 0; i--) path.lineTo(R[i][0], R[i][1]);
+    const nx = p[0][0] - p[1][0], ny = p[0][1] - p[1][1], nd = Math.hypot(nx, ny) || 1;
+    path.quadraticCurveTo(p[0][0] + nx / nd * this.size * 0.12, p[0][1] + ny / nd * this.size * 0.12, L[0][0], L[0][1]);
+    path.closePath();
+    // 尾鳍
+    const tail = new Path2D();
+    const tx = p[n - 1][0], ty = p[n - 1][1], bx = p[n - 2][0] - tx, by = p[n - 2][1] - ty, bd = Math.hypot(bx, by) || 1;
+    const ta = Math.atan2(-by, -bx) + Math.sin(this.ph - n * 0.6) * 0.5, tl = this.size * (this.type === "shark" ? 0.22 : 0.3);
+    tail.moveTo(tx, ty);
+    tail.lineTo(tx + Math.cos(ta - 0.55) * tl, ty + Math.sin(ta - 0.55) * tl);
+    tail.lineTo(tx + Math.cos(ta) * tl * 0.55, ty + Math.sin(ta) * tl * 0.55);
+    tail.lineTo(tx + Math.cos(ta + 0.55) * tl, ty + Math.sin(ta + 0.55) * tl);
+    tail.closePath();
+    if (shadow) {
+      const h = this.depthH;
+      g.save(); g.translate(10 * S * h, 16 * S * h); g.globalAlpha = 0.22; g.fillStyle = "#06243a"; g.fill(path); g.fill(tail);
+      if (this.type === "shark") this.drawFins(g, true);
+      g.restore(); return;
+    }
+    if (this.type === "shark") {
+      this.drawFins(g, false);
+      g.fillStyle = "#1e2a30"; g.fill(tail);
+      const sg = g.createLinearGradient(p[0][0], p[0][1], p[n - 1][0], p[n - 1][1]);
+      sg.addColorStop(0, "#8a9aa2"); sg.addColorStop(1, "#6d7e88");
+      g.fillStyle = sg; g.fill(path);
+      g.save(); g.clip(path); g.strokeStyle = "rgba(255,255,255,0.18)"; g.lineWidth = this.size * 0.03;
+      g.beginPath(); g.moveTo(p[0][0], p[0][1]); for (let i = 1; i < n - 2; i++) g.lineTo(p[i][0], p[i][1]); g.stroke(); g.restore();
+      // 背鳍：黑尖
+      const di = Math.round(n * 0.38), dx = p[di][0], dy = p[di][1], da = Math.atan2(p[di - 1][1] - p[di + 1][1], p[di - 1][0] - p[di + 1][0]);
+      g.save(); g.translate(dx, dy); g.rotate(da);
+      g.fillStyle = "#56656e"; g.beginPath(); g.moveTo(this.size * 0.05, 0); g.lineTo(-this.size * 0.12, -this.size * 0.02); g.lineTo(-this.size * 0.12, this.size * 0.02); g.closePath(); g.fill();
+      g.fillStyle = "#111"; g.beginPath(); g.ellipse(-this.size * 0.1, 0, this.size * 0.03, this.size * 0.018, 0, 0, TAU); g.fill();
+      g.restore();
+      return;
+    }
+    if (this.type === "clown") {
+      g.fillStyle = "#f07a1e"; g.fill(tail); g.fill(path);
+      g.save(); g.clip(path); g.strokeStyle = "#fff"; g.lineWidth = this.size * 0.13;
+      for (const k of [0.18, 0.5, 0.8]) { const i = Math.round(k * (n - 1)); g.beginPath(); g.moveTo(L[i][0], L[i][1]); g.lineTo(R[i][0], R[i][1]); g.stroke(); }
+      g.strokeStyle = "#222"; g.lineWidth = 1; g.stroke(path); g.restore();
+      g.strokeStyle = "rgba(20,20,20,0.6)"; g.lineWidth = 0.8; g.stroke(tail);
+    } else {
+      const [c1, c2] = this.colors;
+      g.fillStyle = c2; g.fill(tail);
+      const fg = g.createLinearGradient(p[0][0], p[0][1], p[n - 1][0], p[n - 1][1]);
+      fg.addColorStop(0, c1); fg.addColorStop(0.65, c1); fg.addColorStop(1, c2);
+      g.fillStyle = fg; g.fill(path);
+    }
+    g.fillStyle = "#111"; g.beginPath(); g.arc(L[1][0] * 0.6 + p[1][0] * 0.4, L[1][1] * 0.6 + p[1][1] * 0.4, Math.max(0.8, this.size * 0.04), 0, TAU); g.fill();
+  }
+  drawFins(g, shadow) {
+    // 鲨鱼的胸鳍（黑色鳍尖）
+    const p = this.pts, i = 2, a = Math.atan2(p[i - 1][1] - p[i + 1][1], p[i - 1][0] - p[i + 1][0]);
+    for (const side of [1, -1]) {
+      g.save(); g.translate(p[i][0], p[i][1]); g.rotate(a + side * 2.2);
+      g.fillStyle = shadow ? "#06243a" : "#6f8088";
+      g.beginPath(); g.moveTo(0, 0); g.quadraticCurveTo(this.size * 0.12, side * this.size * 0.02, this.size * 0.2, side * this.size * 0.06); g.lineTo(this.size * 0.02, side * this.size * 0.06); g.closePath(); g.fill();
+      if (!shadow) { g.fillStyle = "#151515"; g.beginPath(); g.arc(this.size * 0.18, side * this.size * 0.055, this.size * 0.018, 0, TAU); g.fill(); }
+      g.restore();
+    }
+  }
+}
+
+/* ---------- 鳐类：蝠鲼、斑点鹰鳐、蓝点魟 ---------- */
+class Ray {
+  constructor(type, x, y) {
+    this.type = type; this.x = x; this.y = y; this.a = rand(TAU); this.ph = rand(TAU);
+    const cfg = { manta: { span: rand(115, 145), sp: 26, h: 0.7 }, eagle: { span: rand(80, 105), sp: 34, h: 0.55 }, stingray: { span: rand(40, 54), sp: 16, h: 0.08 } }[type];
+    this.cfg = cfg; this.size = cfg.span * S; this.v = cfg.sp * S; this.wander = rand(TAU);
+    this.tail = []; this.rest = 0;
+    if (type === "eagle" || type === "stingray") {
+      const R = seeded((Math.random() * 1e9) | 0);
+      this.spots = Array.from({ length: type === "eagle" ? 46 : 22 }, () => [R() * 2 - 1, R() * 2 - 1, R()]);
+    }
+  }
+  update(dt) {
+    const c = this.cfg; let want = c.sp * S * P.speed, turn = this.type === "manta" ? 0.5 : 0.8;
+    if (this.type === "stingray") {
+      if (this.rest > 0) { this.rest -= dt; want = 0; } else if (Math.random() < dt * 0.04) this.rest = rand(4, 10);
+    }
+    this.wander += (Math.random() - 0.5) * dt * 1.2;
+    let des = this.a + Math.sin(T * 0.13 + this.ph) * 0.6 + this.wander * 0.2;
+    const fl = fleeFrom(this, 0.8);
+    if (fl) { des = Math.atan2(fl.fy, fl.fx); want *= 2.2; turn = 2.5; this.rest = 0; }
+    des = steerSafe(this, des, this.type === "stingray" ? 0.05 : 0.25, this.type === "manta" ? -40 * S : 30 * S);
+    this.a += clamp(angDiff(this.a, des), -turn * dt, turn * dt);
+    this.v = lerp(this.v, want, 1 - Math.exp(-dt * 1.2));
+    this.x += Math.cos(this.a) * this.v * dt; this.y += Math.sin(this.a) * this.v * dt;
+    this.ph += dt * (this.type === "manta" ? 1.4 : this.type === "eagle" ? 2.2 : 3) * (0.4 + this.v / (c.sp * S));
+    // 尾巴：记录走过的路
+    const tx = this.x - Math.cos(this.a) * this.size * 0.3, ty = this.y - Math.sin(this.a) * this.size * 0.3;
+    this.tail.unshift([tx, ty]);
+    const maxLen = this.type === "eagle" ? 34 : this.type === "stingray" ? 16 : 10;
+    if (this.tail.length > maxLen) this.tail.length = maxLen;
+  }
+  bodyPath(flap) {
+    const s = this.size, p = new Path2D();
+    if (this.type === "stingray") {
+      p.ellipse(0, 0, s * 0.42, s * 0.5 * (1 + flap * 0.04), 0, 0, TAU);
+      return p;
+    }
+    const span = s * 0.5 * (1 - Math.abs(flap) * 0.12), tipBack = this.type === "eagle" ? s * 0.18 : s * 0.1;
+    const tipY = flap * s * 0.06;
+    p.moveTo(s * 0.26, 0);                                             // 头
+    p.bezierCurveTo(s * 0.22, -s * 0.12, s * 0.1, -span * 0.75, -tipBack, -span + tipY);  // 左翼前缘
+    p.bezierCurveTo(-s * 0.06, -span * 0.55, -s * 0.14, -s * 0.12, -s * 0.22, -s * 0.04); // 左翼后缘
+    p.lineTo(-s * 0.22, s * 0.04);
+    p.bezierCurveTo(-s * 0.14, s * 0.12, -s * 0.06, span * 0.55, -tipBack, span - tipY);
+    p.bezierCurveTo(s * 0.1, span * 0.75, s * 0.22, s * 0.12, s * 0.26, 0);
+    p.closePath();
+    return p;
+  }
+  draw(g, shadow) {
+    const s = this.size, flap = Math.sin(this.ph);
+    // 尾巴
+    if (this.tail.length > 2) {
+      g.save();
+      if (shadow) { g.translate(14 * S * this.cfg.h, 22 * S * this.cfg.h); g.globalAlpha = 0.2; g.strokeStyle = "#06243a"; }
+      else g.strokeStyle = this.type === "manta" ? "#222" : this.type === "eagle" ? "#1a2230" : "#6a6048";
+      g.lineWidth = Math.max(1, s * (this.type === "stingray" ? 0.05 : 0.015)); g.lineCap = "round";
+      g.beginPath(); g.moveTo(this.tail[0][0], this.tail[0][1]);
+      const step = this.type === "eagle" ? 1 : 1;
+      for (let i = step; i < this.tail.length; i += step) g.lineTo(this.tail[i][0], this.tail[i][1]);
+      g.stroke();
+      if (!shadow && this.type === "stingray") { g.strokeStyle = "#3aa0ff"; g.lineWidth = s * 0.02; g.stroke(); }
+      g.restore();
+    }
+    g.save(); g.translate(this.x, this.y); g.rotate(this.a);
+    const body = this.bodyPath(flap);
+    if (shadow) { g.translate(14 * S * this.cfg.h, 22 * S * this.cfg.h); g.globalAlpha = 0.22 * (1 - this.cfg.h * 0.3); g.fillStyle = "#06243a"; g.fill(body); g.restore(); return; }
+    if (this.type === "manta") {
+      const mg = g.createLinearGradient(s * 0.2, 0, -s * 0.2, 0);
+      mg.addColorStop(0, "#242a30"); mg.addColorStop(1, "#14181c");
+      g.fillStyle = mg; g.fill(body);
+      g.save(); g.clip(body);
+      // 肩上的白斑
+      const sh = g.createRadialGradient(s * 0.05, 0, 0, s * 0.05, 0, s * 0.35);
+      sh.addColorStop(0, "rgba(120,130,140,0.25)"); sh.addColorStop(1, "rgba(120,130,140,0)");
+      g.fillStyle = sh; g.fillRect(-s, -s, 2 * s, 2 * s);
+      g.strokeStyle = "rgba(255,255,255,0.12)"; g.lineWidth = s * 0.01;
+      g.beginPath(); g.moveTo(s * 0.24, 0); g.lineTo(-s * 0.22, 0); g.stroke();
+      g.restore();
+      // 头鳍
+      g.fillStyle = "#1c2025";
+      for (const side of [1, -1]) { g.beginPath(); g.ellipse(s * 0.3, side * s * 0.06, s * 0.07, s * 0.02, side * 0.3, 0, TAU); g.fill(); }
+      g.strokeStyle = "rgba(255,255,255,0.25)"; g.lineWidth = 1.2; g.stroke(body);
+    } else if (this.type === "eagle") {
+      g.fillStyle = "#1b2638"; g.fill(body);
+      g.save(); g.clip(body);
+      g.fillStyle = "rgba(240,245,250,0.9)";
+      for (const [u, v, k] of this.spots) { const x = u * s * 0.25 - s * 0.02, y = v * s * 0.5; g.beginPath(); g.arc(x, y, s * (0.008 + k * 0.012), 0, TAU); g.fill(); }
+      g.restore();
+      g.fillStyle = "#16202e"; g.beginPath(); g.ellipse(s * 0.28, 0, s * 0.07, s * 0.045, 0, 0, TAU); g.fill();
+      g.strokeStyle = "rgba(255,255,255,0.2)"; g.lineWidth = 1; g.stroke(body);
+    } else {
+      const sg = g.createRadialGradient(-s * 0.05, -s * 0.05, s * 0.05, 0, 0, s * 0.5);
+      sg.addColorStop(0, "#b8a070"); sg.addColorStop(1, "#7a6a48");
+      g.fillStyle = sg; g.fill(body);
+      g.fillStyle = "#3aa8ff";
+      for (const [u, v, k] of this.spots) { g.beginPath(); g.arc(u * s * 0.32, v * s * 0.38, s * (0.02 + k * 0.025), 0, TAU); g.fill(); }
+      g.fillStyle = "#e8d29a"; for (const side of [1, -1]) { g.beginPath(); g.arc(s * 0.18, side * s * 0.08, s * 0.035, 0, TAU); g.fill(); }
+    }
+    g.restore();
+  }
+}
+
+/* ---------- 海龟 ---------- */
+class Turtle {
+  constructor(x, y) { this.type = "turtle"; this.x = x; this.y = y; this.a = rand(TAU); this.ph = rand(TAU); this.size = rand(36, 46) * S; this.v = 16 * S; this.rest = 0; this.wander = rand(TAU); }
+  update(dt) {
+    let want = 18 * S * P.speed, turn = 0.6;
+    if (this.rest > 0) { this.rest -= dt; want = 2 * S; } else if (Math.random() < dt * 0.02) this.rest = rand(3, 8);
+    this.wander += (Math.random() - 0.5) * dt;
+    let des = this.a + Math.sin(T * 0.1 + this.ph) * 0.8 + this.wander * 0.2;
+    const fl = fleeFrom(this, 0.7); if (fl) { des = Math.atan2(fl.fy, fl.fx); want *= 2.5; turn = 2; this.rest = 0; }
+    des = steerSafe(this, des, 0.1, 40 * S);
+    this.a += clamp(angDiff(this.a, des), -turn * dt, turn * dt);
+    this.v = lerp(this.v, want, 1 - Math.exp(-dt));
+    this.x += Math.cos(this.a) * this.v * dt; this.y += Math.sin(this.a) * this.v * dt;
+    this.ph += dt * (0.6 + this.v / S * 0.12);
+  }
+  draw(g, shadow) {
+    const s = this.size;
+    g.save(); g.translate(this.x, this.y); g.rotate(this.a);
+    if (shadow) { g.translate(8 * S, 13 * S); g.globalAlpha = 0.22; g.fillStyle = "#06243a"; g.beginPath(); g.ellipse(0, 0, s * 0.55, s * 0.45, 0, 0, TAU); g.fill(); g.restore(); return; }
+    const pad = Math.sin(this.ph) * 0.5;
+    g.fillStyle = "#7d8a58";
+    for (const [px, py, side, front] of [[s * 0.22, s * 0.3, 1, 1], [s * 0.22, -s * 0.3, -1, 1], [-s * 0.3, s * 0.24, 1, 0], [-s * 0.3, -s * 0.24, -1, 0]]) {
+      g.save(); g.translate(px, py); g.rotate(side * (front ? 0.5 + pad * side : 2.4 - pad * side * 0.5));
+      g.beginPath(); g.ellipse(s * (front ? 0.2 : 0.1), 0, s * (front ? 0.26 : 0.13), s * 0.07, 0, 0, TAU); g.fill(); g.restore();
+    }
+    g.beginPath(); g.ellipse(s * 0.5, 0, s * 0.13, s * 0.1, 0, 0, TAU); g.fill();
+    const sh = g.createRadialGradient(-s * 0.1, -s * 0.12, s * 0.05, 0, 0, s * 0.5);
+    sh.addColorStop(0, "#c49a52"); sh.addColorStop(0.7, "#8a6a34"); sh.addColorStop(1, "#5a4420");
+    g.fillStyle = sh; g.beginPath(); g.ellipse(0, 0, s * 0.45, s * 0.36, 0, 0, TAU); g.fill();
+    g.strokeStyle = "rgba(60,40,15,0.6)"; g.lineWidth = 1.2 * S;
+    const hx = s * 0.13, hy = s * 0.11;
+    for (const [cx, cy] of [[0, 0], [-hx * 1.8, 0], [hx * 1.8, 0], [-hx * 0.9, -hy * 1.7], [hx * 0.9, -hy * 1.7], [-hx * 0.9, hy * 1.7], [hx * 0.9, hy * 1.7]]) {
+      g.beginPath(); for (let k = 0; k < 6; k++) { const a = (k / 6) * TAU + Math.PI / 6; const X = cx + Math.cos(a) * hx, Y = cy + Math.sin(a) * hy; k ? g.lineTo(X, Y) : g.moveTo(X, Y); } g.closePath(); g.stroke();
+    }
+    g.restore();
+  }
+}
+
+/* ---------- 水母：海月水母、海刺水母 ---------- */
+class Jelly {
+  constructor(type, x, y) {
+    this.type = type; this.x = x; this.y = y; this.a = rand(TAU); this.ph = rand(TAU);
+    this.size = (type === "moonjelly" ? rand(22, 32) : rand(18, 26)) * S; this.v = 6 * S;
+    this.tent = Array.from({ length: 6 }, () => ({ pts: [], len: rand(3, 4.5) }));
+  }
+  update(dt) {
+    this.ph += dt * 1.6;
+    const pulse = Math.max(0, Math.sin(this.ph)) ** 2;
+    let des = this.a + Math.sin(T * 0.05 + this.ph * 0.1) * 0.3;
+    const fl = fleeFrom(this, 0.6);
+    let push = 0; if (fl) { des = Math.atan2(fl.fy, fl.fx); push = 30 * S; }
+    des = steerSafe(this, des, 0.15, 20 * S);
+    this.a += clamp(angDiff(this.a, des), -0.4 * dt, 0.4 * dt);
+    const sp = (4 + pulse * 14) * S * P.speed + push;
+    this.x += Math.cos(this.a) * sp * dt + 3 * S * dt; this.y += Math.sin(this.a) * sp * dt + 1.5 * S * dt; // 水流把它们往右下带
+    // 触手（海刺水母）：跟随走过的路
+    if (this.type === "nettle") for (const tn of this.tent) { tn.pts.unshift([this.x, this.y]); if (tn.pts.length > 70) tn.pts.length = 70; }
+  }
+  draw(g, shadow) {
+    const s = this.size * (1 + Math.max(0, Math.sin(this.ph)) * 0.08);
+    if (shadow) { g.save(); g.translate(this.x + 12 * S, this.y + 18 * S); g.globalAlpha = 0.12; g.fillStyle = "#06243a"; g.beginPath(); g.arc(0, 0, s, 0, TAU); g.fill(); g.restore(); return; }
+    if (this.type === "nettle") {
+      // 拖在身后的长触手
+      g.strokeStyle = "rgba(245,200,140,0.6)"; g.lineWidth = 1.4 * S; g.lineCap = "round";
+      this.tent.forEach((tn, k) => {
+        if (tn.pts.length < 3) return;
+        const off = (k - 2.5) * s * 0.18;
+        g.beginPath();
+        const n = Math.min(tn.pts.length, Math.round(14 * tn.len));
+        for (let i = 0; i < n; i++) {
+          const [px, py] = tn.pts[i];
+          const w = Math.sin(this.ph * 1.3 + i * 0.35 + k) * s * 0.12 * (i / n);
+          const x = px + Math.cos(this.a + Math.PI / 2) * (off + w), y = py + Math.sin(this.a + Math.PI / 2) * (off + w);
+          i ? g.lineTo(x, y) : g.moveTo(x, y);
+        }
+        g.stroke();
+      });
+      const bg = g.createRadialGradient(this.x - s * 0.2, this.y - s * 0.2, s * 0.1, this.x, this.y, s);
+      bg.addColorStop(0, "rgba(255,220,150,0.95)"); bg.addColorStop(0.7, "rgba(236,150,60,0.9)"); bg.addColorStop(1, "rgba(200,110,40,0.6)");
+      g.fillStyle = bg; g.beginPath(); g.arc(this.x, this.y, s, 0, TAU); g.fill();
+      g.strokeStyle = "rgba(150,70,20,0.55)"; g.lineWidth = 1.3 * S;
+      for (let k = 0; k < 16; k++) { const a = (k / 16) * TAU + this.ph * 0.05; g.beginPath(); g.moveTo(this.x + Math.cos(a) * s * 0.25, this.y + Math.sin(a) * s * 0.25); g.lineTo(this.x + Math.cos(a) * s * 0.95, this.y + Math.sin(a) * s * 0.95); g.stroke(); }
+      g.fillStyle = "rgba(255,240,210,0.6)"; g.beginPath(); g.arc(this.x, this.y, s * 0.22, 0, TAU); g.fill();
+    } else {
+      const bg = g.createRadialGradient(this.x, this.y, s * 0.2, this.x, this.y, s);
+      bg.addColorStop(0, "rgba(230,235,255,0.12)"); bg.addColorStop(0.85, "rgba(220,230,255,0.2)"); bg.addColorStop(1, "rgba(255,255,255,0.38)");
+      g.fillStyle = bg; g.beginPath(); g.arc(this.x, this.y, s, 0, TAU); g.fill();
+      g.strokeStyle = "rgba(255,255,255,0.4)"; g.lineWidth = 1 * S; g.stroke();
+      // 四个马蹄形的生殖腺
+      for (let k = 0; k < 4; k++) {
+        const a = (k / 4) * TAU + 0.4 + this.ph * 0.02, gx = this.x + Math.cos(a) * s * 0.28, gy = this.y + Math.sin(a) * s * 0.28;
+        const gg = g.createRadialGradient(gx, gy, 0, gx, gy, s * 0.2);
+        gg.addColorStop(0, "rgba(210,180,240,0.45)"); gg.addColorStop(1, "rgba(210,180,240,0)");
+        g.fillStyle = gg; g.beginPath(); g.ellipse(gx, gy, s * 0.2, s * 0.13, a, 0, TAU); g.fill();
+      }
+      // 边缘一圈细触手
+      g.strokeStyle = "rgba(255,255,255,0.35)"; g.lineWidth = 0.6;
+      for (let k = 0; k < 40; k++) { const a = (k / 40) * TAU; g.beginPath(); g.moveTo(this.x + Math.cos(a) * s, this.y + Math.sin(a) * s); g.lineTo(this.x + Math.cos(a) * s * 1.08, this.y + Math.sin(a) * s * 1.08); g.stroke(); }
+    }
+  }
+}
+
+/* ---------- 物种表：生物栏和参数共用 ---------- */
+const SPECIES = [
+  { k: "manta", name: "蝠鲼", en: "Manta", make: (x, y) => new Ray("manta", x, y) },
+  { k: "eagle", name: "斑点鹰鳐", en: "Eagle Ray", make: (x, y) => new Ray("eagle", x, y) },
+  { k: "stingray", name: "蓝点魟", en: "Blue-spot Ray", make: (x, y) => new Ray("stingray", x, y) },
+  { k: "turtle", name: "绿海龟", en: "Sea Turtle", make: (x, y) => new Turtle(x, y) },
+  { k: "moonjelly", name: "海月水母", en: "Moon Jelly", make: (x, y) => new Jelly("moonjelly", x, y) },
+  { k: "nettle", name: "海刺水母", en: "Sea Nettle", make: (x, y) => new Jelly("nettle", x, y) },
+  { k: "school", name: "银色鱼群", en: "Silver School", make: (x, y) => new SchoolFish(x, y), batch: 10 },
+  { k: "reef", name: "彩色鱼", en: "Reef Fish", make: (x, y) => new SpineFish("reef", x, y) },
+  { k: "clown", name: "小丑鱼", en: "Clownfish", make: (x, y) => new SpineFish("clown", x, y) },
+  { k: "shark", name: "黑鳍礁鲨", en: "Blacktip Shark", make: (x, y) => new SpineFish("shark", x, y) },
+];
+const typeOfKey = (k) => (k === "manta" || k === "eagle" || k === "stingray" ? k : k);
+
+function randomWaterPoint(minDepth = 0.25) {
+  for (let i = 0; i < 60; i++) { const x = rand(W * 0.05, W * 0.95), y = rand(H * 0.05, H * 0.95); if (depthAt(x, y) >= minDepth) return [x, y]; }
+  return [W * 0.7, H * 0.7];
+}
+function countOf(k) { return agents.reduce((n, a) => n + (a.type === k ? 1 : 0), 0); }
+function syncCounts() {
+  for (const sp of SPECIES) {
+    const want = P[sp.k] | 0;
+    let have = countOf(sp.k);
+    while (have < want) { const [x, y] = sp.k === "school" ? nearSchool() : randomWaterPoint(sp.k === "stingray" ? 0.1 : 0.3); agents.push(sp.make(x, y)); have++; }
+    if (have > want) {
+      let drop = have - want;
+      for (let i = agents.length - 1; i >= 0 && drop > 0; i--) if (agents[i].type === sp.k) { agents.splice(i, 1); drop--; }
+    }
+  }
+  updateStats();
+}
+function nearSchool() { const sc = schools[(Math.random() * schools.length) | 0]; return [sc.x + rand(-60, 60) * S, sc.y + rand(-60, 60) * S]; }
+
+/* ============================================================
+   椰子树（在沙滩上，盖在最上面，影子落在沙和水上）
+   ============================================================ */
+let palms = [];
+function layoutPalms() {
+  palms = [];
+  const R = seeded(77);
+  for (let i = 0; i < 1; i++) {
+    for (let k = 0; k < 60; k++) {
+      const x = W * (0.06 + R() * 0.16), y = H * (0.08 + R() * 0.2);
+      if (baseDepth(x / W, y / H) < -0.25) { palms.push({ x, y, r: (120 + R() * 30) * S, rot: R() * TAU, fronds: 8, seed: R() * 100 }); break; }
+    }
+  }
+}
+function drawPalm(g, p, shadow) {
+  const sway = Math.sin(T * 0.5 + p.seed) * 0.04;
+  g.save();
+  g.translate(p.x + (shadow ? 40 * S : 0), p.y + (shadow ? 60 * S : 0)); g.rotate(p.rot + sway);
+  for (let f = 0; f < p.fronds; f++) {
+    const a = (f / p.fronds) * TAU, len = p.r * (0.85 + 0.15 * Math.sin(f * 2.3)), bend = 0.25 * Math.sin(f * 1.7 + T * 0.4 + p.seed);
+    g.save(); g.rotate(a);
+    const col = shadow ? "rgba(30,50,40,0.18)" : "rgba(150,145,110,0.9)";
+    g.strokeStyle = col; g.lineWidth = (shadow ? 3 : 2.4) * S; g.lineCap = "round";
+    g.beginPath(); g.moveTo(0, 0); g.quadraticCurveTo(len * 0.5, len * bend * 0.4, len, len * bend); g.stroke();
+    g.lineWidth = (shadow ? 2 : 1.4) * S;
+    for (let k = 3; k < 16; k++) {
+      const t = k / 16, x = len * t, y = len * bend * t * t;
+      const ll = len * 0.16 * Math.sin(t * Math.PI) + 3 * S;
+      for (const side of [1, -1]) { g.beginPath(); g.moveTo(x, y); g.lineTo(x + ll * 0.7, y + side * ll * 0.8); g.stroke(); }
+    }
+    g.restore();
+  }
+  if (!shadow) { g.fillStyle = "#7a6a48"; g.beginPath(); g.arc(0, 0, 7 * S, 0, TAU); g.fill(); }
+  g.restore();
+}
+
+/* ============================================================
+   主循环
+   ============================================================ */
+let T = 0, last = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - last) / 1000); last = now; T += dt;
+  // 鱼群中心
+  for (const sc of schools) { sc.ph += dt * sc.sp; sc.x = W * (sc.cx + Math.cos(sc.ph) * sc.rx); sc.y = H * (sc.cy + Math.sin(sc.ph * 1.3) * sc.ry); }
+  const grid = new Map();
+  for (const a of agents) if (a.type === "school") { const k = ((a.x / 50) | 0) * 4099 + ((a.y / 50) | 0); let c = grid.get(k); if (!c) grid.set(k, (c = [])); c.push(a); }
+  for (const a of agents) a.update(dt, grid);
+  scared = scared.filter((s) => T - s.t < 2.5);
+
+  drawWater(T);
+  const g = ctx;
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.clearRect(0, 0, W, H);
+  if (!glOK) { g.drawImage(bottomCanvas, 0, 0, W, H); g.fillStyle = "rgba(20,110,140,0.45)"; g.fillRect(0, 0, W, H); }
+  // 影子
+  for (const p of palms) drawPalm(g, p, true);
+  for (const a of agents) { g.globalAlpha = 1; a.draw(g, true); }
+  g.globalAlpha = 1;
+  // 由低到高：魟 → 鱼 → 海龟 → 鹰鳐 → 鲨 → 蝠鲼 → 水母
+  const order = { stingray: 0, reef: 1, clown: 1, school: 2, turtle: 3, eagle: 4, shark: 4, manta: 5, moonjelly: 6, nettle: 6 };
+  const sorted = agents.slice().sort((a, b) => order[a.type] - order[b.type]);
+  for (const a of sorted) { g.globalAlpha = 1; a.draw(g, false); }
+  g.globalAlpha = 1;
+  // 涟漪的高光圈（叠在生物上面，像在水面）
+  for (const r of ripples) {
+    const age = T - r.t0; if (age > 2.6) continue;
+    const rad = age * 120, a = (1 - age / 2.6) * 0.5 * r.s;
+    g.strokeStyle = `rgba(255,255,255,${a})`; g.lineWidth = 2 * S;
+    g.beginPath(); g.arc(r.x, r.y, rad, 0, TAU); g.stroke();
+    g.strokeStyle = `rgba(255,255,255,${a * 0.5})`; g.lineWidth = 1.2 * S;
+    g.beginPath(); g.arc(r.x, r.y, rad * 0.7, 0, TAU); g.stroke();
+  }
+  for (const p of palms) drawPalm(g, p, false);
+  // 拖动时的波纹轨迹
+  if (dragging && pointer.down && T - lastWake > 0.09) { lastWake = T; addRipple(pointer.x, pointer.y, 0.45); scared.push({ x: pointer.x, y: pointer.y, t: T }); }
+}
+
+/* ============================================================
+   交互：点水、拖着划水、从生物栏拖进海里
+   ============================================================ */
+const pointer = { x: 0, y: 0, down: false };
+let dragging = false, lastWake = 0, dragSpecies = null, ghost = null;
+lifeCanvas.addEventListener("pointerdown", (e) => {
+  pointer.down = true; pointer.x = e.clientX; pointer.y = e.clientY; dragging = true;
+  if (depthAt(e.clientX, e.clientY) > 0) { addRipple(e.clientX, e.clientY, 1); scared.push({ x: e.clientX, y: e.clientY, t: T }); }
+  hideHint();
+});
+addEventListener("pointermove", (e) => {
+  pointer.x = e.clientX; pointer.y = e.clientY;
+  if (dragging && depthAt(e.clientX, e.clientY) <= 0) dragging = pointer.down && true;
+  if (ghost) {
+    ghost.style.left = e.clientX + "px"; ghost.style.top = e.clientY + "px";
+    ghost.classList.toggle("bad", !canDrop(e.clientX, e.clientY));
+  }
+});
+addEventListener("pointerup", (e) => {
+  pointer.down = false; dragging = false;
+  if (ghost && dragSpecies) {
+    if (canDrop(e.clientX, e.clientY)) spawnAt(dragSpecies, e.clientX, e.clientY);
+    ghost.remove(); ghost = null; dragSpecies = null;
+  }
+});
+function canDrop(x, y) {
+  const overUI = document.elementFromPoint(x, y)?.closest(".dock, .panel, .tune-btn");
+  return !overUI && depthAt(x, y) > 0.02;
+}
+function spawnAt(sp, x, y) {
+  const n = sp.batch || 1;
+  for (let i = 0; i < n; i++) agents.push(sp.make(x + rand(-20, 20) * S * (n > 1 ? 1 : 0), y + rand(-20, 20) * S * (n > 1 ? 1 : 0)));
+  P[sp.k] = countOf(sp.k);
+  addRipple(x, y, 1.2); addRipple(x, y, 0.6);
+  refreshPanelValue(sp.k); saveParams(); updateStats(); hideHint();
+}
+
+/* ---------- 生物栏 ---------- */
+function iconFor(sp) {
+  const c = makeCanvas(92, 92), g = c.getContext("2d");
+  g.scale(92 / 64, 92 / 64);
+  const saveS = S; S = 1;
+  const a = sp.make(32, 32);
+  a.a = -Math.PI / 2 + (sp.k === "school" ? 0.6 : 0);
+  // 把生物缩放进 64×64
+  const fit = { manta: 0.32, eagle: 0.5, stingray: 1, turtle: 1.15, moonjelly: 1, nettle: 1.1, school: 3.2, reef: 2, clown: 2.6, shark: 0.42 }[sp.k];
+  g.translate(32, 32); g.scale(fit, fit); g.translate(-32, -32);
+  if (a.pts) { for (let i = 0; i < a.pts.length; i++) { a.pts[i][0] = 32; a.pts[i][1] = 32 + i * a.size / (a.pts.length - 1) - a.size * 0.45; } a.x = 32; a.y = 32 - a.size * 0.45; }
+  if (a.tail) a.tail = Array.from({ length: 12 }, (_, i) => [32, 32 + a.size * 0.3 + i * 2.2]);
+  if (a.tent) a.tent.forEach((tn) => (tn.pts = Array.from({ length: 30 }, (_, i) => [32, 32 + i * 1.2])));
+  if (sp.k === "school") {
+    for (let i = 0; i < 5; i++) { const f = new SchoolFish(32 + (i % 3 - 1) * 6, 32 + (i - 2) * 4); f.a = a.a; f.draw(g, false); }
+  } else a.draw(g, false);
+  S = saveS;
+  return c;
+}
+function buildDock() {
+  const dock = document.getElementById("dock");
+  dock.innerHTML = "";
+  for (const sp of SPECIES) {
+    const card = document.createElement("div");
+    card.className = "card"; card.title = `把${sp.name}拖进海里，或点一下随机放生`;
+    card.appendChild(iconFor(sp));
+    card.insertAdjacentHTML("beforeend", `<b>${sp.name}</b><small>${sp.en}</small>`);
+    let downAt = null;
+    card.addEventListener("pointerdown", (e) => {
+      e.preventDefault(); downAt = [e.clientX, e.clientY];
+      dragSpecies = sp;
+      ghost = document.createElement("img");
+      ghost.className = "ghost"; ghost.src = card.querySelector("canvas").toDataURL();
+      ghost.style.left = e.clientX + "px"; ghost.style.top = e.clientY + "px"; ghost.classList.add("bad");
+      document.body.appendChild(ghost);
+    });
+    card.addEventListener("pointerup", (e) => {
+      // 没怎么拖动就是「点一下」：随机放进海里
+      if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) < 6) {
+        const [x, y] = sp.k === "school" ? nearSchool() : randomWaterPoint(0.3);
+        spawnAt(sp, x, y);
+        if (ghost) { ghost.remove(); ghost = null; dragSpecies = null; }
+      }
+      downAt = null;
+    });
+    dock.appendChild(card);
+  }
+}
+
+/* ---------- 参数面板 ---------- */
+const panel = document.getElementById("panel");
+function buildPanel() {
+  let html = `<h2>浅湾 · 参数 <button id="closePanel" aria-label="关闭">×</button></h2>`;
+  for (const d of PARAM_DEFS) {
+    if (d.sec) { html += `<h3>${d.sec}</h3>`; continue; }
+    html += `<div class="row"><label for="p-${d.k}">${d.label}<output id="o-${d.k}">${fmt(d, P[d.k])}</output></label>
+      <input type="range" id="p-${d.k}" min="${d.min}" max="${d.max}" step="${d.step}" value="${P[d.k]}"></div>`;
+  }
+  html += `<button class="reset" id="resetParams">恢复默认</button>`;
+  panel.innerHTML = html;
+  for (const d of PARAM_DEFS) {
+    if (!d.k) continue;
+    const el = document.getElementById("p-" + d.k);
+    el.addEventListener("input", () => {
+      P[d.k] = parseFloat(el.value);
+      document.getElementById("o-" + d.k).textContent = fmt(d, P[d.k]);
+      if (SPECIES.some((s) => s.k === d.k)) syncCounts();
+      saveParams();
+    });
+  }
+  document.getElementById("closePanel").onclick = () => panel.classList.add("hidden");
+  document.getElementById("resetParams").onclick = () => { for (const d of PARAM_DEFS) if (d.k) P[d.k] = d.v; saveParams(); buildPanel(); syncCounts(); };
+}
+function fmt(d, v) { return d.step >= 1 ? String(v | 0) : (+v).toFixed(d.step < 0.01 ? 3 : 2); }
+function refreshPanelValue(k) {
+  const d = PARAM_DEFS.find((x) => x.k === k); if (!d) return;
+  const el = document.getElementById("p-" + k); if (el) { if (P[k] > d.max) el.max = P[k]; el.value = P[k]; }
+  const o = document.getElementById("o-" + k); if (o) o.textContent = fmt(d, P[k]);
+}
+document.getElementById("tuneBtn").onclick = () => panel.classList.toggle("hidden");
+
+function updateStats() {
+  const c = (k) => countOf(k);
+  const rays = c("manta") + c("eagle") + c("stingray"), jellies = c("moonjelly") + c("nettle"), fish = c("school") + c("reef") + c("clown");
+  document.getElementById("stats").textContent = `${rays} 只鳐 · ${jellies} 只水母 · ${c("turtle")} 只海龟 · ${fish} 条鱼 · ${c("shark")} 条鲨鱼`;
+}
+let hintHidden = false;
+function hideHint() { if (hintHidden) return; hintHidden = true; setTimeout(() => document.getElementById("hint").classList.add("hidden-fade"), 2500); }
+
+/* ---------- 尺寸 ---------- */
+function resize() {
+  W = innerWidth; H = innerHeight;
+  DPR = Math.min(devicePixelRatio || 1, 1.75);
+  GDPR = Math.min(devicePixelRatio || 1, 1.25);   // 水面着色器用稍低分辨率，省 GPU
+  S = clamp(Math.min(W, H) / 900, 0.6, 1.5);
+  lifeCanvas.width = Math.round(W * DPR); lifeCanvas.height = Math.round(H * DPR);
+  glCanvas.width = Math.round(W * GDPR); glCanvas.height = Math.round(H * GDPR);
+  buildWorld(); layoutPalms();
+  if (glOK) { uploadTex(texBottom, 0, bottomCanvas); uploadTex(texDepth, 1, depthCanvas); }
+  for (const a of agents) { if (depthAt(a.x, a.y) < 0.05) { const [x, y] = randomWaterPoint(0.3); a.x = x; a.y = y; if (a.pts) for (const p of a.pts) { p[0] = x; p[1] = y; } } }
+}
+
+/* ---------- 启动 ---------- */
+glOK = initGL();
+resize();
+makeSchoolCenters();
+for (const sc of schools) { sc.x = W * sc.cx; sc.y = H * sc.cy; }
+syncCounts();
+buildDock();
+buildPanel();
+updateStats();
+setTimeout(() => (document.getElementById("intro").style.opacity = 0), 1800);
+setTimeout(() => document.getElementById("intro").remove(), 3600);
+setTimeout(hideHint, 9000);
+addEventListener("resize", resize);
+requestAnimationFrame(frame);
+// 偶尔自己起一圈涟漪，像有鱼跃出水面
+setInterval(() => { if (document.hidden) return; const [x, y] = randomWaterPoint(0.3); addRipple(x, y, 0.5); }, 7000);
+</script>
+</body>
+</html>
